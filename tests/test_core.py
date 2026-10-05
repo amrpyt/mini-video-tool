@@ -1,7 +1,14 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from core import (
+    aligned_stream_window,
     build_download_command,
+    default_silence_destination,
+    normalize_partial_download,
+    parse_download_progress,
     parse_silence_intervals,
     parse_timecode,
     silence_to_keep_ranges,
@@ -31,14 +38,69 @@ class DownloadCommandTests(unittest.TestCase):
             output_dir="out",
         )
         self.assertIn("--download-sections", command)
+        self.assertIn("--progress", command)
+        self.assertIn("--newline", command)
         section = command[command.index("--download-sections") + 1]
         self.assertEqual(section, "*00:01:05-00:02:05")
         self.assertIn("height<=720", command[command.index("-f") + 1])
         output_template = command[command.index("-o") + 1]
         self.assertIn("[00-01-05-00-02-05]", output_template)
+        self.assertIn("[720p]", output_template)
+
+    def test_parses_machine_readable_progress(self):
+        self.assertEqual(
+            parse_download_progress("PROGRESS:42.5|1.2MiB/s|00:08"),
+            (42.5, "1.2MiB/s", "00:08"),
+        )
+
+    def test_normalizes_audio_preroll_with_stream_copy_only(self):
+        info = {
+            "streams": [
+                {"codec_type": "video", "start_time": "8.272"},
+                {"codec_type": "audio", "start_time": "-0.007"},
+            ],
+            "format": {"start_time": "-0.007"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "clip.webm"
+            source.write_bytes(b"original")
+            (root / "ffmpeg.exe").write_bytes(b"x")
+            (root / "ffprobe.exe").write_bytes(b"x")
+
+            def fake_run(command, **_kwargs):
+                self.assertIn("copy", command)
+                self.assertNotIn("libx264", command)
+                self.assertAlmostEqual(float(command[command.index("-ss") + 1]), 8.279, places=3)
+                Path(command[-1]).write_bytes(b"normalized")
+                return Mock(returncode=0, stderr="")
+
+            with patch("core._probe", return_value=info), patch("core.subprocess.run", side_effect=fake_run):
+                result = normalize_partial_download(ffmpeg_dir=root, source=source)
+
+            self.assertEqual(result, source.resolve())
+            self.assertEqual(source.read_bytes(), b"normalized")
 
 
 class SilenceTests(unittest.TestCase):
+    def test_aligns_mismatched_stream_starts_before_silence_cut(self):
+        info = {
+            "streams": [
+                {"codec_type": "video", "start_time": "2.305"},
+                {"codec_type": "audio", "start_time": "-0.007"},
+            ],
+            "format": {"start_time": "-0.007", "duration": "15.980"},
+        }
+        video_offset, audio_offset, duration = aligned_stream_window(info)
+        self.assertAlmostEqual(video_offset, 0.0, places=3)
+        self.assertAlmostEqual(audio_offset, 2.312, places=3)
+        self.assertAlmostEqual(duration, 13.668, places=3)
+
+    def test_silence_output_preserves_supported_container(self):
+        self.assertEqual(default_silence_destination(__import__("pathlib").Path("x.mkv")).suffix, ".mkv")
+        self.assertEqual(default_silence_destination(__import__("pathlib").Path("x.mov")).suffix, ".mov")
+        self.assertEqual(default_silence_destination(__import__("pathlib").Path("x.webm")).suffix, ".webm")
+
     def test_parses_silencedetect_output(self):
         text = """
         [silencedetect @ x] silence_start: 2
