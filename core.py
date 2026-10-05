@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,6 +19,24 @@ QUALITY_FORMATS = {
     "480p": "bv*[height<=480]+ba/b[height<=480]",
     "360p": "bv*[height<=360]+ba/b[height<=360]",
 }
+
+
+def _fast_section_format(base_format: str) -> str:
+    height_match = re.search(r"height<=([0-9]+)", str(base_format))
+    # "Best" must stay truly best; preferring HLS there can silently cap a 4K
+    # video to a lower HLS ladder. Explicit 1080/720/480/360 choices are safe.
+    if not height_match:
+        return str(base_format)
+    height_filter = f"[height<={height_match.group(1)}]"
+    hls_h264 = (
+        f"bv{height_filter}[protocol*=m3u8][vcodec^=avc1]+ba[protocol*=m3u8]/"
+        f"b{height_filter}[protocol*=m3u8][vcodec^=avc1]"
+    )
+    hls_any = (
+        f"bv{height_filter}[protocol*=m3u8]+ba[protocol*=m3u8]/"
+        f"b{height_filter}[protocol*=m3u8]"
+    )
+    return f"{hls_h264}/{hls_any}/{base_format}"
 
 SILENCE_THRESHOLD_DB = -35
 SILENCE_MIN_SECONDS = 0.6
@@ -74,7 +93,7 @@ def build_download_command(
     if end <= start:
         raise ValueError("وقت النهاية لازم يكون بعد البداية.")
     try:
-        format_selector = QUALITY_FORMATS[quality]
+        format_selector = _fast_section_format(QUALITY_FORMATS[quality])
     except KeyError as exc:
         raise ValueError("الجودة غير معروفة.") from exc
     quality_tag = "best" if quality == "أفضل جودة متاحة" else quality
@@ -101,6 +120,8 @@ def build_download_command(
         ),
         "--print",
         "after_move:FINAL_FILE:%(filepath)s",
+        "--downloader-args",
+        "ffmpeg:-progress pipe:1 -nostats -stats_period 0.25",
         "-f",
         format_selector,
         "--no-overwrites",
@@ -179,6 +200,20 @@ def download_section(
     )
     final_file: Path | None = None
     lines: list[str] = []
+    ffmpeg_progress: dict[str, str] = {}
+    ffmpeg_progress_keys = {
+        "frame",
+        "fps",
+        "bitrate",
+        "total_size",
+        "out_time_us",
+        "out_time_ms",
+        "out_time",
+        "speed",
+        "progress",
+    }
+    last_stream_bytes: float | None = None
+    last_stream_wall: float | None = None
     assert process.stdout is not None
     for raw_line in process.stdout:
         line = raw_line.rstrip()
@@ -197,7 +232,42 @@ def download_section(
                     telemetry["percent"], telemetry["speed_text"], telemetry["eta_text"]
                 )
             continue
-        if log_callback:
+        key, separator, value = line.partition("=")
+        if separator and key in ffmpeg_progress_keys:
+            ffmpeg_progress[key] = value.strip()
+            if key == "progress" and telemetry_callback:
+                event = _ffmpeg_telemetry_event(
+                    ffmpeg_progress,
+                    duration=max(0.001, float(end) - float(start)),
+                    stage="download_stream",
+                )
+                total_size = event.get("total_size")
+                now = time.monotonic()
+                data_rate = None
+                if isinstance(total_size, (int, float)):
+                    event["downloaded_bytes"] = float(total_size)
+                    if (
+                        last_stream_bytes is not None
+                        and last_stream_wall is not None
+                        and now > last_stream_wall
+                        and float(total_size) >= last_stream_bytes
+                    ):
+                        data_rate = (float(total_size) - last_stream_bytes) / (now - last_stream_wall)
+                    last_stream_bytes = float(total_size)
+                    last_stream_wall = now
+                event["speed"] = data_rate
+                event["speed_text"] = (
+                    f"{event.get('speed_factor'):.2f}x"
+                    if isinstance(event.get("speed_factor"), (int, float))
+                    else ""
+                )
+                telemetry_callback(event)
+            continue
+        if log_callback and (
+            line.startswith(("[youtube]", "[info]", "[download]", "ERROR", "WARNING"))
+            or "error" in line.lower()
+            or "warning" in line.lower()
+        ):
             log_callback(line)
     return_code = process.wait()
     if return_code != 0:

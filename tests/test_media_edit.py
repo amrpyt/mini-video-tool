@@ -6,12 +6,14 @@ from unittest.mock import Mock, patch
 
 from media_edit import (
     _ffmpeg_telemetry_event,
+    CaptionStyle,
     Overlay,
     build_caption_download_command,
     build_render_command,
     default_render_destination,
     download_arabic_captions,
     extract_preview_frame,
+    fast_render_destination,
     parse_json3_cues,
     parse_srt_cues,
     resize_overlay,
@@ -264,12 +266,63 @@ class RenderTests(unittest.TestCase):
             caption_font_family="Different Font",
         )
         graph = command[command.index("-filter_complex") + 1]
-        self.assertIn("force_style='Fontname=Different Font'", graph)
+        self.assertIn("force_style='Fontname=Different Font,", graph)
+
+    def test_caption_style_can_control_background_shadow_size_and_position(self):
+        command = build_render_command(
+            ffmpeg="ffmpeg.exe",
+            source=Path("talk.mkv"),
+            destination=Path("talk_edited.mp4"),
+            video_width=1920,
+            video_height=1080,
+            overlays=[],
+            captions_ass=Path("captions.ass"),
+            caption_font_family="Ping AR + LT",
+            caption_style=CaptionStyle(
+                size_percent=6.0,
+                text_color="#FFEEDD",
+                outline_color="#112233",
+                outline_width=2.5,
+                shadow=3.0,
+                background_enabled=True,
+                background_color="#445566",
+                background_opacity=60.0,
+                position="top",
+                horizontal="right",
+                margin_percent=5.0,
+                bold=True,
+                italic=True,
+            ),
+        )
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("Fontsize=65", graph)
+        self.assertIn("BorderStyle=3", graph)
+        self.assertIn("Shadow=3.00", graph)
+        self.assertIn("Alignment=9", graph)
+        self.assertIn("Bold=-1", graph)
+        self.assertIn("Italic=-1", graph)
+
+    def test_qsv_render_command_uses_hardware_encoder(self):
+        command = build_render_command(
+            ffmpeg="ffmpeg.exe",
+            source=Path("talk.webm"),
+            destination=Path("talk_edited.mp4"),
+            video_width=1280,
+            video_height=720,
+            overlays=[],
+            video_encoder="qsv",
+        )
+        self.assertIn("h264_qsv", command)
+        self.assertIn("-global_quality", command)
+        self.assertIn("nv12", command)
 
     def test_preserves_supported_container_in_default_destination(self):
         self.assertEqual(default_render_destination(Path("talk.mkv")).suffix, ".mkv")
         self.assertEqual(default_render_destination(Path("talk.mov")).suffix, ".mov")
         self.assertEqual(default_render_destination(Path("talk.webm")).suffix, ".webm")
+
+    def test_fast_render_destination_is_mp4_even_for_webm_source(self):
+        self.assertEqual(fast_render_destination(Path("talk.webm")).name, "talk_edited.mp4")
 
     def test_builds_image_black_bar_and_caption_render(self):
         overlays = [

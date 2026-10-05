@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from PIL import Image
+
 
 @dataclass
 class Overlay:
@@ -27,6 +29,24 @@ class CaptionCue:
     start: float
     end: float
     text: str
+
+
+@dataclass(frozen=True)
+class CaptionStyle:
+    size_percent: float = 4.5
+    text_color: str = "#FFFFFF"
+    outline_color: str = "#000000"
+    outline_width: float = 1.2
+    shadow: float = 2.0
+    shadow_color: str = "#000000"
+    background_enabled: bool = False
+    background_color: str = "#000000"
+    background_opacity: float = 55.0
+    position: str = "bottom"
+    horizontal: str = "center"
+    margin_percent: float = 7.0
+    bold: bool = False
+    italic: bool = False
 
 
 def resize_overlay(
@@ -525,6 +545,53 @@ def default_render_destination(source: Path) -> Path:
     return source.with_name(f"{source.stem}_edited{target_suffix}")
 
 
+def fast_render_destination(source: Path) -> Path:
+    source = Path(source)
+    return source.with_name(f"{source.stem}_edited.mp4")
+
+
+_QSV_AVAILABLE: dict[str, bool] = {}
+
+
+def qsv_available(ffmpeg: str | Path) -> bool:
+    key = str(Path(ffmpeg).resolve())
+    if key in _QSV_AVAILABLE:
+        return _QSV_AVAILABLE[key]
+    command = [
+        key,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=128x72:d=0.1",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "h264_qsv",
+        "-f",
+        "null",
+        "NUL" if os.name == "nt" else "/dev/null",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            creationflags=_no_window_flag(),
+        )
+        available = result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        available = False
+    _QSV_AVAILABLE[key] = available
+    return available
+
+
 def build_render_command(
     *,
     ffmpeg: str | Path,
@@ -536,16 +603,19 @@ def build_render_command(
     captions_ass: Path | None = None,
     font_dir: Path | None = None,
     caption_font_family: str | None = None,
+    caption_style: CaptionStyle | None = None,
     audio_trim_start: float = 0.0,
     audio_delay_start: float = 0.0,
     has_audio: bool = True,
+    video_encoder: str = "software",
+    overlays_prepared: bool = False,
 ) -> list[str]:
     command = [str(ffmpeg), "-y", "-hide_banner", "-i", str(source)]
     image_overlays = [overlay for overlay in overlays if overlay.kind == "image"]
     for overlay in image_overlays:
         if overlay.path is None:
             raise ValueError("Overlay image path is missing.")
-        command += ["-loop", "1", "-i", str(overlay.path)]
+        command += ["-loop", "1", "-framerate", "1", "-i", str(overlay.path)]
 
     graph: list[str] = ["[0:v]setpts=PTS-STARTPTS[base0]"]
     current = "base0"
@@ -562,9 +632,12 @@ def build_render_command(
                 f"[{current}]drawbox=x={x}:y={y}:w={w}:h={h}:color=black@0.92:t=fill[{next_label}]"
             )
         elif overlay.kind == "image":
-            graph.append(
-                f"[{image_input}:v]scale={w}:{h}:flags=lanczos,format=rgba[ov{stage}]"
-            )
+            if overlays_prepared:
+                graph.append(f"[{image_input}:v]format=rgba[ov{stage}]")
+            else:
+                graph.append(
+                    f"[{image_input}:v]scale={w}:{h}:flags=lanczos,format=rgba[ov{stage}]"
+                )
             graph.append(
                 f"[{current}][ov{stage}]overlay={x}:{y}:format=auto:shortest=1[{next_label}]"
             )
@@ -579,11 +652,13 @@ def build_render_command(
         option = f"subtitles='{caption_path}'"
         if font_dir:
             option += f":fontsdir='{_escape_filter_path(Path(font_dir).resolve())}'"
-        if caption_font_family:
-            option += (
-                ":force_style='Fontname="
-                f"{_escape_filter_value(caption_font_family)}'"
-            )
+        force_style = _caption_force_style(
+            caption_style or CaptionStyle(),
+            font_family=caption_font_family,
+            video_height=video_height,
+        )
+        if force_style:
+            option += f":force_style='{_escape_filter_value(force_style)}'"
         graph.append(f"[{current}]{option}[vout]")
         current = "vout"
 
@@ -619,7 +694,7 @@ def build_render_command(
     if audio_map is not None:
         insert_at = command.index("-progress")
         command[insert_at:insert_at] = ["-map", audio_map]
-    command += _encoding_args_for_suffix(destination.suffix.lower())
+    command += _encoding_args_for_suffix(destination.suffix.lower(), video_encoder=video_encoder)
     command += ["-shortest", str(destination)]
     return command
 
@@ -633,7 +708,9 @@ def render_video(
     captions_ass: Path | None = None,
     font_dir: Path | None = None,
     caption_font_family: str | None = None,
+    caption_style: CaptionStyle | None = None,
     destination: Path | None = None,
+    prefer_hardware: bool = True,
     progress_callback: Callable[[float], None] | None = None,
     telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
@@ -646,73 +723,79 @@ def render_video(
     destination = Path(destination or default_render_destination(source)).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = _temporary_sibling(destination)
-    lines: list[str] = []
-    progress_state: dict[str, str] = {}
-    progress_keys = {
-        "frame",
-        "fps",
-        "bitrate",
-        "total_size",
-        "out_time_us",
-        "out_time_ms",
-        "out_time",
-        "speed",
-        "progress",
-    }
+    encoder = "qsv" if prefer_hardware and destination.suffix.lower() != ".webm" and qsv_available(ffmpeg) else "software"
+    if telemetry_callback:
+        telemetry_callback(
+            {
+                "stage": "render_prepare",
+                "percent": 0.0,
+                "encoder": "Intel Quick Sync" if encoder == "qsv" else "CPU H.264/VP9",
+                "duration": duration,
+            }
+        )
     try:
-        command = build_render_command(
-            ffmpeg=ffmpeg,
-            source=source,
-            destination=temp_destination,
-            video_width=width,
-            video_height=height,
-            overlays=overlays,
-            captions_ass=captions_ass,
-            font_dir=font_dir,
-            caption_font_family=caption_font_family,
-            audio_trim_start=audio_trim_start,
-            audio_delay_start=audio_delay_start,
-            has_audio=has_audio,
-        )
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=_no_window_flag(),
-        )
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.rstrip()
-            if not line:
-                continue
-            lines.append(line)
-            key, separator, value = line.partition("=")
-            if separator and key in progress_keys:
-                progress_state[key] = value.strip()
-                if key == "progress":
-                    telemetry = _ffmpeg_telemetry_event(
-                        progress_state,
-                        duration=duration,
-                        stage="render",
+        with tempfile.TemporaryDirectory(prefix="MiniVideoTool-overlays-") as overlay_temp:
+            prepared_overlays = _prepare_static_overlays(
+                overlays,
+                video_width=width,
+                video_height=height,
+                directory=Path(overlay_temp),
+            )
+
+            def execute(selected_encoder: str) -> tuple[int, list[str]]:
+                temp_destination.unlink(missing_ok=True)
+                command = build_render_command(
+                    ffmpeg=ffmpeg,
+                    source=source,
+                    destination=temp_destination,
+                    video_width=width,
+                    video_height=height,
+                    overlays=prepared_overlays,
+                    captions_ass=captions_ass,
+                    font_dir=font_dir,
+                    caption_font_family=caption_font_family,
+                    caption_style=caption_style,
+                    audio_trim_start=audio_trim_start,
+                    audio_delay_start=audio_delay_start,
+                    has_audio=has_audio,
+                    video_encoder=selected_encoder,
+                    overlays_prepared=True,
+                )
+                return _run_render_process(
+                    command,
+                    duration=duration,
+                    encoder_label="Intel Quick Sync" if selected_encoder == "qsv" else "CPU",
+                    progress_callback=progress_callback,
+                    telemetry_callback=telemetry_callback,
+                    log_callback=log_callback,
+                )
+
+            return_code, lines = execute(encoder)
+            if (
+                return_code != 0
+                or not temp_destination.is_file()
+                or temp_destination.stat().st_size <= 0
+            ) and encoder == "qsv":
+                if log_callback:
+                    log_callback("تعذر Quick Sync في هذا الملف؛ رجوع تلقائي لترميز CPU H.264.")
+                encoder = "software"
+                if telemetry_callback:
+                    telemetry_callback(
+                        {
+                            "stage": "render_prepare",
+                            "percent": 0.0,
+                            "encoder": "CPU fallback",
+                            "duration": duration,
+                        }
                     )
-                    if telemetry_callback:
-                        telemetry_callback(telemetry)
-                    if progress_callback:
-                        progress_callback(telemetry["percent"])
-                continue
-            if log_callback:
-                log_callback(line)
-        return_code = process.wait()
-        if (
-            return_code != 0
-            or not temp_destination.is_file()
-            or temp_destination.stat().st_size <= 0
-        ):
-            raise RuntimeError(_last_lines("\n".join(lines) or "فشل إخراج الفيديو."))
+                return_code, lines = execute(encoder)
+
+            if (
+                return_code != 0
+                or not temp_destination.is_file()
+                or temp_destination.stat().st_size <= 0
+            ):
+                raise RuntimeError(_last_lines("\n".join(lines) or "فشل إخراج الفيديو."))
         temp_destination.replace(destination)
     finally:
         temp_destination.unlink(missing_ok=True)
@@ -725,12 +808,37 @@ def render_video(
                 "percent": 100.0,
                 "duration": duration,
                 "output_size": destination.stat().st_size,
+                "encoder": "Intel Quick Sync" if encoder == "qsv" else "CPU",
             }
         )
     return destination
 
 
-def _encoding_args_for_suffix(suffix: str) -> list[str]:
+def _encoding_args_for_suffix(suffix: str, *, video_encoder: str = "software") -> list[str]:
+    if video_encoder == "qsv" and suffix in {".mp4", ".mov", ".mkv"}:
+        args = [
+            "-c:v",
+            "h264_qsv",
+            "-preset",
+            "fast",
+            "-global_quality",
+            "20",
+            "-look_ahead",
+            "0",
+            "-low_power",
+            "1",
+            "-async_depth",
+            "6",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-pix_fmt",
+            "nv12",
+        ]
+        if suffix in {".mp4", ".mov"}:
+            args += ["-movflags", "+faststart"]
+        return args
     if suffix == ".webm":
         return [
             "-c:v",
@@ -739,6 +847,12 @@ def _encoding_args_for_suffix(suffix: str) -> list[str]:
             "30",
             "-b:v",
             "0",
+            "-deadline",
+            "good",
+            "-cpu-used",
+            "5",
+            "-row-mt",
+            "1",
             "-c:a",
             "libopus",
             "-b:a",
@@ -763,6 +877,150 @@ def _encoding_args_for_suffix(suffix: str) -> list[str]:
     if suffix in {".mp4", ".mov"}:
         args += ["-movflags", "+faststart"]
     return args
+
+
+def _prepare_static_overlays(
+    overlays: list[Overlay],
+    *,
+    video_width: int,
+    video_height: int,
+    directory: Path,
+) -> list[Overlay]:
+    prepared: list[Overlay] = []
+    directory.mkdir(parents=True, exist_ok=True)
+    for index, overlay in enumerate(overlays):
+        if overlay.kind != "image" or overlay.path is None:
+            prepared.append(replace(overlay))
+            continue
+        width = max(2, round(_clamp(overlay.w, 0.001, 1.0) * video_width))
+        height = max(2, round(_clamp(overlay.h, 0.001, 1.0) * video_height))
+        destination = directory / f"overlay-{index}-{width}x{height}.png"
+        with Image.open(overlay.path) as image:
+            rgba = image.convert("RGBA")
+            if rgba.size != (width, height):
+                rgba = rgba.resize((width, height), Image.Resampling.LANCZOS)
+            rgba.save(destination, format="PNG", optimize=True)
+        prepared.append(replace(overlay, path=destination))
+    return prepared
+
+
+def _run_render_process(
+    command: list[str],
+    *,
+    duration: float,
+    encoder_label: str,
+    progress_callback: Callable[[float], None] | None,
+    telemetry_callback: Callable[[dict], None] | None,
+    log_callback: Callable[[str], None] | None,
+) -> tuple[int, list[str]]:
+    progress_state: dict[str, str] = {}
+    progress_keys = {
+        "frame",
+        "fps",
+        "bitrate",
+        "total_size",
+        "out_time_us",
+        "out_time_ms",
+        "out_time",
+        "speed",
+        "progress",
+    }
+    lines: list[str] = []
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        creationflags=_no_window_flag(),
+    )
+    assert process.stdout is not None
+    for raw_line in process.stdout:
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        lines.append(line)
+        key, separator, value = line.partition("=")
+        if separator and key in progress_keys:
+            progress_state[key] = value.strip()
+            if key == "progress":
+                telemetry = _ffmpeg_telemetry_event(
+                    progress_state,
+                    duration=duration,
+                    stage="render",
+                )
+                telemetry["encoder"] = encoder_label
+                if telemetry_callback:
+                    telemetry_callback(telemetry)
+                if progress_callback:
+                    progress_callback(telemetry["percent"])
+            continue
+        if log_callback:
+            log_callback(line)
+    return process.wait(), lines
+
+
+def _caption_force_style(
+    style: CaptionStyle,
+    *,
+    font_family: str | None,
+    video_height: int,
+) -> str:
+    position_map = {
+        ("bottom", "left"): 1,
+        ("bottom", "center"): 2,
+        ("bottom", "right"): 3,
+        ("middle", "left"): 4,
+        ("middle", "center"): 5,
+        ("middle", "right"): 6,
+        ("top", "left"): 7,
+        ("top", "center"): 8,
+        ("top", "right"): 9,
+    }
+    alignment = position_map.get((style.position, style.horizontal), 2)
+    font_size = max(
+        12,
+        round(max(1, video_height) * max(1.0, min(12.0, style.size_percent)) / 100.0),
+    )
+    margin_v = max(
+        0,
+        round(max(1, video_height) * max(0.0, min(40.0, style.margin_percent)) / 100.0),
+    )
+    back_color = (
+        _ass_color(style.background_color, opacity=style.background_opacity)
+        if style.background_enabled
+        else _ass_color(style.shadow_color, opacity=100.0)
+    )
+    values = [
+        f"Fontsize={font_size}",
+        f"PrimaryColour={_ass_color(style.text_color, opacity=100.0)}",
+        f"OutlineColour={_ass_color(style.outline_color, opacity=100.0)}",
+        f"BackColour={back_color}",
+        f"Bold={-1 if style.bold else 0}",
+        f"Italic={-1 if style.italic else 0}",
+        f"BorderStyle={3 if style.background_enabled else 1}",
+        f"Outline={max(0.0, min(8.0, float(style.outline_width))):.2f}",
+        f"Shadow={max(0.0, min(8.0, float(style.shadow))):.2f}",
+        f"Alignment={alignment}",
+        f"MarginV={margin_v}",
+    ]
+    if font_family:
+        values.insert(0, f"Fontname={font_family}")
+    return ",".join(values)
+
+
+def _ass_color(value: str, *, opacity: float) -> str:
+    text = str(value or "#000000").strip().lstrip("#")
+    if len(text) != 6 or not re.fullmatch(r"[0-9A-Fa-f]{6}", text):
+        text = "000000"
+    red = int(text[0:2], 16)
+    green = int(text[2:4], 16)
+    blue = int(text[4:6], 16)
+    visible = max(0.0, min(100.0, float(opacity))) / 100.0
+    alpha = round((1.0 - visible) * 255)
+    return f"&H{alpha:02X}{blue:02X}{green:02X}{red:02X}"
 
 
 def _srt_timestamp_seconds(value: str) -> float:

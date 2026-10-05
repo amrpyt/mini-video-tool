@@ -42,16 +42,34 @@ class DownloadCommandTests(unittest.TestCase):
         self.assertIn("--download-sections", command)
         self.assertIn("--progress", command)
         self.assertIn("--newline", command)
+        self.assertIn("--downloader-args", command)
+        self.assertIn("-progress pipe:1", command[command.index("--downloader-args") + 1])
         progress_template = command[command.index("--progress-template") + 1]
         self.assertIn("progress.downloaded_bytes", progress_template)
         self.assertIn("progress.total_bytes_estimate", progress_template)
         self.assertIn("progress.speed", progress_template)
         section = command[command.index("--download-sections") + 1]
         self.assertEqual(section, "*00:01:05-00:02:05")
-        self.assertIn("height<=720", command[command.index("-f") + 1])
+        selected_format = command[command.index("-f") + 1]
+        self.assertIn("height<=720", selected_format)
+        self.assertIn("protocol*=m3u8", selected_format)
+        self.assertIn("vcodec^=avc1", selected_format)
         output_template = command[command.index("-o") + 1]
         self.assertIn("[00-01-05-00-02-05]", output_template)
         self.assertIn("[720p]", output_template)
+
+    def test_best_quality_does_not_cap_itself_to_hls_ladder(self):
+        command = build_download_command(
+            yt_dlp="yt-dlp.exe",
+            ffmpeg_dir="bin",
+            url="https://youtu.be/example",
+            start=10.0,
+            end=20.0,
+            quality="أفضل جودة متاحة",
+            output_dir="out",
+        )
+        selected_format = command[command.index("-f") + 1]
+        self.assertEqual(selected_format, "bv*+ba/b")
 
     def test_parses_machine_readable_progress(self):
         self.assertEqual(

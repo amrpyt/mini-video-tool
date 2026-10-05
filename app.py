@@ -9,17 +9,19 @@ import queue
 import time
 from dataclasses import replace
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from PIL import Image, ImageFont, ImageTk
 
 from core import QUALITY_FORMATS, cut_silence, download_section, parse_timecode
 from media_edit import (
+    CaptionStyle,
     Overlay,
     captions_for_section,
     default_render_destination,
     download_arabic_captions,
     extract_preview_frame,
+    fast_render_destination,
     probe_media,
     render_video,
     resize_overlay,
@@ -86,6 +88,7 @@ class MiniVideoTool(tk.Tk):
         self.action_buttons: list[ttk.Button] = []
         self.busy_controls: list[tuple[tk.Widget, str]] = []
         self.caption_font_path = discover_caption_font()
+        self.caption_style = CaptionStyle()
         self.overlays: list[Overlay] = []
         self.selected_overlay: int | None = None
         self.drag_state: tuple[str, int, float, float, Overlay] | None = None
@@ -340,8 +343,23 @@ class MiniVideoTool(tk.Tk):
             anchor="e"
         )
         self.font_button = ttk.Button(controls, text="اختيار خط", command=self._choose_font)
-        self.font_button.pack(fill="x", pady=(4, 12))
+        self.font_button.pack(fill="x", pady=(4, 4))
         self._busy_control(self.font_button)
+        self.caption_style_button = ttk.Button(
+            controls,
+            text="ستايل الكابشن…",
+            command=self._open_caption_style,
+        )
+        self.caption_style_button.pack(fill="x", pady=(0, 4))
+        self._busy_control(self.caption_style_button)
+        self.caption_style_summary_var = tk.StringVar(value=self._caption_style_summary())
+        ttk.Label(
+            controls,
+            textvariable=self.caption_style_summary_var,
+            foreground="#666666",
+            wraplength=250,
+            justify="right",
+        ).pack(anchor="e", pady=(0, 12))
         self._busy_control(self.canvas)
 
         ttk.Separator(controls).pack(fill="x", pady=5)
@@ -931,6 +949,226 @@ class MiniVideoTool(tk.Tk):
         if selected:
             self.caption_font_path = Path(selected).resolve()
             self.font_label_var.set(self._font_display_text())
+            self.caption_style_summary_var.set(self._caption_style_summary())
+
+    def _caption_style_summary(self) -> str:
+        style = self.caption_style
+        position = {"top": "فوق", "middle": "وسط", "bottom": "تحت"}.get(
+            style.position, "تحت"
+        )
+        background = (
+            f"خلفية {style.background_opacity:.0f}%" if style.background_enabled else "بدون خلفية"
+        )
+        return (
+            f"{style.size_percent:.1f}% • شادو {style.shadow:.1f} • "
+            f"{background} • {position}"
+        )
+
+    def _open_caption_style(self) -> None:
+        if self.busy:
+            return
+        style = self.caption_style
+        original_font_path = self.caption_font_path
+        selected_font_path = self.caption_font_path
+        win = tk.Toplevel(self)
+        win.title("ستايل الكابشن")
+        win.transient(self)
+        win.resizable(False, False)
+        win.grab_set()
+
+        frame = ttk.Frame(win, padding=16)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+
+        size_var = tk.DoubleVar(value=style.size_percent)
+        outline_var = tk.DoubleVar(value=style.outline_width)
+        shadow_var = tk.DoubleVar(value=style.shadow)
+        background_enabled_var = tk.BooleanVar(value=style.background_enabled)
+        background_opacity_var = tk.DoubleVar(value=style.background_opacity)
+        margin_var = tk.DoubleVar(value=style.margin_percent)
+        bold_var = tk.BooleanVar(value=style.bold)
+        italic_var = tk.BooleanVar(value=style.italic)
+        position_var = tk.StringVar(
+            value={"bottom": "أسفل", "middle": "منتصف", "top": "أعلى"}.get(
+                style.position, "أسفل"
+            )
+        )
+        horizontal_var = tk.StringVar(
+            value={"left": "يسار", "center": "وسط", "right": "يمين"}.get(
+                style.horizontal, "وسط"
+            )
+        )
+        colors = {
+            "text": style.text_color,
+            "outline": style.outline_color,
+            "shadow": style.shadow_color,
+            "background": style.background_color,
+        }
+        color_buttons: dict[str, tk.Button] = {}
+
+        row = 0
+        ttk.Label(frame, text="الخط").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        font_label = ttk.Label(frame, text=self._font_display_text(), width=34, anchor="e")
+        font_label.grid(row=row, column=1, sticky="ew", pady=4)
+
+        def choose_font_here() -> None:
+            nonlocal selected_font_path
+            selected = filedialog.askopenfilename(
+                parent=win,
+                filetypes=[("Fonts", "*.otf *.ttf"), ("All files", "*.*")],
+            )
+            if selected:
+                selected_font_path = Path(selected).resolve()
+                try:
+                    family = font_family(selected_font_path)
+                except Exception:
+                    family = "Arial"
+                font_label.configure(text=f"خط الكابشن: {family}")
+
+        ttk.Button(frame, text="اختيار…", command=choose_font_here).grid(
+            row=row, column=2, sticky="ew", pady=4
+        )
+
+        row += 1
+        ttk.Label(frame, text="الحجم").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        ttk.Scale(frame, from_=1.5, to=10.0, variable=size_var, orient="horizontal").grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+        ttk.Label(frame, text="% من ارتفاع الفيديو").grid(row=row, column=2, sticky="w", pady=4)
+
+        def color_row(label: str, key: str) -> None:
+            nonlocal row
+            row += 1
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+
+            def pick() -> None:
+                chosen = colorchooser.askcolor(colors[key], parent=win)[1]
+                if chosen:
+                    colors[key] = chosen.upper()
+                    color_buttons[key].configure(bg=colors[key], activebackground=colors[key])
+
+            button = tk.Button(
+                frame,
+                text=colors[key],
+                bg=colors[key],
+                fg="#000000" if key == "text" else "#ffffff",
+                relief="flat",
+                command=pick,
+                width=16,
+            )
+            color_buttons[key] = button
+            button.grid(row=row, column=1, sticky="ew", pady=4)
+
+        color_row("لون النص", "text")
+        color_row("لون الحد", "outline")
+
+        row += 1
+        ttk.Label(frame, text="سمك الحد").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        ttk.Scale(frame, from_=0, to=6, variable=outline_var, orient="horizontal").grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+
+        color_row("لون الشادو", "shadow")
+        row += 1
+        ttk.Label(frame, text="قوة الشادو").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        ttk.Scale(frame, from_=0, to=6, variable=shadow_var, orient="horizontal").grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+
+        row += 1
+        ttk.Checkbutton(
+            frame,
+            text="خلفية خلف النص",
+            variable=background_enabled_var,
+        ).grid(row=row, column=1, sticky="e", pady=4)
+        color_row("لون الخلفية", "background")
+
+        row += 1
+        ttk.Label(frame, text="شفافية الخلفية").grid(
+            row=row, column=0, sticky="e", padx=(0, 10), pady=4
+        )
+        ttk.Scale(frame, from_=0, to=100, variable=background_opacity_var, orient="horizontal").grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+        ttk.Label(frame, text="0% مخفية • 100% مصمتة").grid(row=row, column=2, sticky="w", pady=4)
+
+        row += 1
+        ttk.Label(frame, text="الموضع الرأسي").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        ttk.Combobox(
+            frame,
+            textvariable=position_var,
+            values=("أعلى", "منتصف", "أسفل"),
+            state="readonly",
+            width=16,
+        ).grid(row=row, column=1, sticky="ew", pady=4)
+
+        row += 1
+        ttk.Label(frame, text="المحاذاة").grid(row=row, column=0, sticky="e", padx=(0, 10), pady=4)
+        ttk.Combobox(
+            frame,
+            textvariable=horizontal_var,
+            values=("يمين", "وسط", "يسار"),
+            state="readonly",
+            width=16,
+        ).grid(row=row, column=1, sticky="ew", pady=4)
+
+        row += 1
+        ttk.Label(frame, text="الهامش من الحافة").grid(
+            row=row, column=0, sticky="e", padx=(0, 10), pady=4
+        )
+        ttk.Scale(frame, from_=0, to=25, variable=margin_var, orient="horizontal").grid(
+            row=row, column=1, sticky="ew", pady=4
+        )
+        ttk.Label(frame, text="% من ارتفاع الفيديو").grid(row=row, column=2, sticky="w", pady=4)
+
+        row += 1
+        flags = ttk.Frame(frame)
+        flags.grid(row=row, column=1, sticky="e", pady=(6, 10))
+        ttk.Checkbutton(flags, text="عريض", variable=bold_var).pack(side="right", padx=5)
+        ttk.Checkbutton(flags, text="مائل", variable=italic_var).pack(side="right", padx=5)
+
+        row += 1
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+
+        def apply_style() -> None:
+            self.caption_font_path = selected_font_path
+            self.font_label_var.set(self._font_display_text())
+            self.caption_style = CaptionStyle(
+                size_percent=float(size_var.get()),
+                text_color=colors["text"],
+                outline_color=colors["outline"],
+                outline_width=float(outline_var.get()),
+                shadow=float(shadow_var.get()),
+                shadow_color=colors["shadow"],
+                background_enabled=bool(background_enabled_var.get()),
+                background_color=colors["background"],
+                background_opacity=float(background_opacity_var.get()),
+                position={"أسفل": "bottom", "منتصف": "middle", "أعلى": "top"}[
+                    position_var.get()
+                ],
+                horizontal={"يسار": "left", "وسط": "center", "يمين": "right"}[
+                    horizontal_var.get()
+                ],
+                margin_percent=float(margin_var.get()),
+                bold=bool(bold_var.get()),
+                italic=bool(italic_var.get()),
+            )
+            self.caption_style_summary_var.set(self._caption_style_summary())
+            win.destroy()
+
+        def cancel_style() -> None:
+            self.caption_font_path = original_font_path
+            win.destroy()
+
+        ttk.Button(buttons, text="تطبيق", command=apply_style).pack(side="right")
+        ttk.Button(buttons, text="إلغاء", command=cancel_style).pack(side="right", padx=6)
+        win.protocol("WM_DELETE_WINDOW", cancel_style)
+
+        win.update_idletasks()
+        x = self.winfo_rootx() + max(20, (self.winfo_width() - win.winfo_reqwidth()) // 2)
+        y = self.winfo_rooty() + max(20, (self.winfo_height() - win.winfo_reqheight()) // 2)
+        win.geometry(f"+{x}+{y}")
 
     def _font_display_text(self) -> str:
         if self.caption_font_path:
@@ -958,8 +1196,9 @@ class MiniVideoTool(tk.Tk):
                 raise ValueError("أضف صورة/شريط أو فعّل الكابشن الأول.")
             ffmpeg = binary("ffmpeg.exe")
             ffprobe = binary("ffprobe.exe")
-            destination = default_render_destination(source)
+            destination = fast_render_destination(source)
             overlays = [replace(overlay) for overlay in self.overlays]
+            caption_style = replace(self.caption_style)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -985,7 +1224,9 @@ class MiniVideoTool(tk.Tk):
                 captions_ass=captions,
                 font_dir=font_dir,
                 caption_font_family=caption_family,
+                caption_style=caption_style,
                 destination=destination,
+                prefer_hardware=True,
                 telemetry_callback=self._thread_ffmpeg_telemetry,
                 log_callback=self._thread_log,
             )
@@ -1235,6 +1476,7 @@ class MiniVideoTool(tk.Tk):
         stage = str(telemetry.get("stage") or "download")
         stage_names = {
             "download": "تنزيل بيانات الوسائط من يوتيوب",
+            "download_stream": "تحميل HLS السريع لحظيًا",
             "download_normalize": "تسوية بداية الصوت والصورة بدون إعادة ترميز",
             "download_normalized": "تمت تسوية المسارات",
             "download_ready": "الملف النهائي جاهز",
@@ -1292,11 +1534,16 @@ class MiniVideoTool(tk.Tk):
             else:
                 self.telemetry_transfer_detail_var.set(f"{speed_text} • وسائط مستلمة فعليًا")
 
-        eta = self._parse_eta_text(str(telemetry.get("eta_text") or ""))
+        eta_value = telemetry.get("eta_seconds")
+        eta = (
+            float(eta_value)
+            if isinstance(eta_value, (int, float))
+            else self._parse_eta_text(str(telemetry.get("eta_text") or ""))
+        )
         self.operation_eta_seconds = eta
         self.operation_eta_label = "النقل الحالي"
         speed_text = str(telemetry.get("speed_text") or "").strip()
-        self.telemetry_engine_var.set("yt-dlp")
+        self.telemetry_engine_var.set("HLS • FFmpeg" if stage == "download_stream" else "yt-dlp")
         self.telemetry_engine_detail_var.set(
             f"سرعة {speed_text}" if speed_text and "Unknown" not in speed_text else "نقل مباشر من يوتيوب"
         )
@@ -1312,6 +1559,7 @@ class MiniVideoTool(tk.Tk):
             "silence_plan": "حساب خطة القص",
             "silence_render": "إعادة بناء الفيديو بدون الصمت",
             "silence_done": "تم قص الصمت",
+            "render_prepare": "تجهيز مسار الإخراج السريع",
             "render": "تركيب العناصر وترميز الفيديو",
             "render_done": "تم إخراج الفيديو",
         }
@@ -1321,6 +1569,11 @@ class MiniVideoTool(tk.Tk):
         percent = telemetry.get("percent")
         if isinstance(percent, (int, float)):
             self._set_activity(self.operation_title or "معالجة", percent=float(percent))
+
+        encoder_label = str(telemetry.get("encoder") or "").strip()
+        if stage == "render_prepare" and encoder_label:
+            self.telemetry_engine_var.set(encoder_label)
+            self.telemetry_engine_detail_var.set("اختيار محرك الترميز تلقائيًا")
 
         eta = telemetry.get("eta_seconds")
         self.operation_eta_seconds = float(eta) if isinstance(eta, (int, float)) else None
@@ -1378,9 +1631,9 @@ class MiniVideoTool(tk.Tk):
             if isinstance(speed_factor, (int, float)) and speed_factor > 0
             else speed_text.replace("x", "×")
         )
-        engine_main = display_speed if display_speed else "FFmpeg"
+        engine_main = display_speed if display_speed else (encoder_label or "FFmpeg")
         if isinstance(fps, (int, float)) and fps > 0:
-            engine_main = f"{display_speed or 'FFmpeg'} • {float(fps):.1f} إطار/ث"
+            engine_main = f"{encoder_label or display_speed or 'FFmpeg'} • {display_speed or '—'} • {float(fps):.1f} إطار/ث"
         self.telemetry_engine_var.set(engine_main)
         bitrate_display = bitrate.replace("kbits/s", "كبت/ث").replace("Mbits/s", "مبت/ث")
         self.telemetry_engine_detail_var.set(
