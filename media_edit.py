@@ -610,6 +610,8 @@ def build_render_command(
         ";".join(graph),
         "-map",
         f"[{current}]",
+        "-stats_period",
+        "0.25",
         "-progress",
         "pipe:1",
         "-nostats",
@@ -633,6 +635,7 @@ def render_video(
     caption_font_family: str | None = None,
     destination: Path | None = None,
     progress_callback: Callable[[float], None] | None = None,
+    telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> Path:
     source = Path(source).resolve()
@@ -644,6 +647,18 @@ def render_video(
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = _temporary_sibling(destination)
     lines: list[str] = []
+    progress_state: dict[str, str] = {}
+    progress_keys = {
+        "frame",
+        "fps",
+        "bitrate",
+        "total_size",
+        "out_time_us",
+        "out_time_ms",
+        "out_time",
+        "speed",
+        "progress",
+    }
     try:
         command = build_render_command(
             ffmpeg=ffmpeg,
@@ -675,16 +690,21 @@ def render_video(
             if not line:
                 continue
             lines.append(line)
-            if line.startswith("out_time_ms="):
-                try:
-                    seconds = int(line.split("=", 1)[1]) / 1_000_000
-                except ValueError:
-                    continue
-                if progress_callback and duration > 0:
-                    progress_callback(min(100.0, seconds / duration * 100.0))
-            elif log_callback and not line.startswith(
-                ("progress=", "frame=", "fps=", "bitrate=", "total_size=")
-            ):
+            key, separator, value = line.partition("=")
+            if separator and key in progress_keys:
+                progress_state[key] = value.strip()
+                if key == "progress":
+                    telemetry = _ffmpeg_telemetry_event(
+                        progress_state,
+                        duration=duration,
+                        stage="render",
+                    )
+                    if telemetry_callback:
+                        telemetry_callback(telemetry)
+                    if progress_callback:
+                        progress_callback(telemetry["percent"])
+                continue
+            if log_callback:
                 log_callback(line)
         return_code = process.wait()
         if (
@@ -698,6 +718,15 @@ def render_video(
         temp_destination.unlink(missing_ok=True)
     if progress_callback:
         progress_callback(100.0)
+    if telemetry_callback:
+        telemetry_callback(
+            {
+                "stage": "render_done",
+                "percent": 100.0,
+                "duration": duration,
+                "output_size": destination.stat().st_size,
+            }
+        )
     return destination
 
 
@@ -767,6 +796,48 @@ def _escape_filter_path(path: Path) -> str:
 
 def _escape_filter_value(value: str) -> str:
     return str(value).replace("\\", r"\\").replace("'", r"\'")
+
+
+def _ffmpeg_telemetry_event(state: dict[str, str], *, duration: float, stage: str) -> dict:
+    out_time = 0.0
+    for key in ("out_time_us", "out_time_ms"):
+        value = _optional_float(state.get(key))
+        if value is not None:
+            out_time = max(0.0, value / 1_000_000.0)
+            break
+    speed_text = str(state.get("speed") or "").strip()
+    speed_factor = _optional_float(speed_text.rstrip("x"))
+    percent = min(100.0, max(0.0, out_time / duration * 100.0)) if duration > 0 else 0.0
+    eta = None
+    if speed_factor and speed_factor > 0 and duration > out_time:
+        eta = (duration - out_time) / speed_factor
+    return {
+        "stage": stage,
+        "percent": percent,
+        "out_time": out_time,
+        "duration": duration,
+        "frame": _optional_float(state.get("frame")),
+        "fps": _optional_float(state.get("fps")),
+        "bitrate": str(state.get("bitrate") or "").strip(),
+        "total_size": _optional_float(state.get("total_size")),
+        "speed_text": speed_text,
+        "speed_factor": speed_factor,
+        "eta_seconds": eta,
+        "progress": str(state.get("progress") or "").strip(),
+    }
+
+
+def _optional_float(value) -> float | None:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"na", "n/a", "none", "unknown"}:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in {float("inf"), float("-inf")}:
+        return None
+    return number
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:

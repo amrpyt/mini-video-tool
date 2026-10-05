@@ -91,8 +91,14 @@ def build_download_command(
         "--download-sections",
         f"*{format_timecode(start)}-{format_timecode(end)}",
         "--progress",
+        "--progress-delta",
+        "0.25",
         "--progress-template",
-        "download:PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+        (
+            "download:PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|"
+            "%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|"
+            "%(progress.elapsed)s|%(progress.speed)s"
+        ),
         "--print",
         "after_move:FINAL_FILE:%(filepath)s",
         "-f",
@@ -105,18 +111,36 @@ def build_download_command(
 
 
 def parse_download_progress(line: str) -> tuple[float, str, str] | None:
+    telemetry = parse_download_telemetry(line)
+    if telemetry is None:
+        return None
+    return telemetry["percent"], telemetry["speed_text"], telemetry["eta_text"]
+
+
+def parse_download_telemetry(line: str) -> dict | None:
     text = str(line).strip()
     if not text.startswith("PROGRESS:"):
         return None
-    parts = text.removeprefix("PROGRESS:").split("|", 2)
-    if len(parts) != 3:
+    parts = text.removeprefix("PROGRESS:").split("|")
+    if len(parts) < 3:
         return None
     percent_text = parts[0].replace("%", "").strip()
     try:
         percent = float(percent_text)
     except ValueError:
         return None
-    return max(0.0, min(100.0, percent)), parts[1].strip(), parts[2].strip()
+    numeric = list(parts[3:8]) + [""] * max(0, 5 - len(parts[3:8]))
+    return {
+        "stage": "download",
+        "percent": max(0.0, min(100.0, percent)),
+        "speed_text": parts[1].strip(),
+        "eta_text": parts[2].strip(),
+        "downloaded_bytes": _optional_float(numeric[0]),
+        "total_bytes": _optional_float(numeric[1]),
+        "total_bytes_estimate": _optional_float(numeric[2]),
+        "elapsed": _optional_float(numeric[3]),
+        "speed": _optional_float(numeric[4]),
+    }
 
 
 def download_section(
@@ -129,6 +153,7 @@ def download_section(
     quality: str,
     output_dir: str | Path,
     progress_callback: Callable[[float, str, str], None] | None = None,
+    telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> Path:
     output = Path(output_dir)
@@ -163,20 +188,32 @@ def download_section(
         if line.startswith("FINAL_FILE:"):
             final_file = Path(line.removeprefix("FINAL_FILE:").strip()).resolve()
             continue
-        progress = parse_download_progress(line)
-        if progress and progress_callback:
-            progress_callback(*progress)
-        elif log_callback:
+        telemetry = parse_download_telemetry(line)
+        if telemetry:
+            if telemetry_callback:
+                telemetry_callback(telemetry)
+            if progress_callback:
+                progress_callback(
+                    telemetry["percent"], telemetry["speed_text"], telemetry["eta_text"]
+                )
+            continue
+        if log_callback:
             log_callback(line)
     return_code = process.wait()
     if return_code != 0:
         raise RuntimeError(_last_lines("\n".join(lines) or "فشل التحميل."))
     if final_file and final_file.is_file():
-        return normalize_partial_download(
+        result = normalize_partial_download(
             ffmpeg_dir=ffmpeg_dir,
             source=final_file,
             log_callback=log_callback,
+            telemetry_callback=telemetry_callback,
         )
+        if telemetry_callback:
+            telemetry_callback(
+                {"stage": "download_ready", "percent": 100.0, "output_size": result.stat().st_size}
+            )
+        return result
     section_tag = (
         f"{format_timecode(start).replace(':', '-')}-"
         f"{format_timecode(end).replace(':', '-')}"
@@ -194,11 +231,17 @@ def download_section(
         reverse=True,
     )
     if matches:
-        return normalize_partial_download(
+        result = normalize_partial_download(
             ffmpeg_dir=ffmpeg_dir,
             source=matches[0].resolve(),
             log_callback=log_callback,
+            telemetry_callback=telemetry_callback,
         )
+        if telemetry_callback:
+            telemetry_callback(
+                {"stage": "download_ready", "percent": 100.0, "output_size": result.stat().st_size}
+            )
+        return result
     raise RuntimeError("تم التحميل لكن تعذر تحديد اسم الملف الناتج.")
 
 
@@ -207,6 +250,7 @@ def normalize_partial_download(
     ffmpeg_dir: str | Path,
     source: str | Path,
     log_callback: Callable[[str], None] | None = None,
+    telemetry_callback: Callable[[dict], None] | None = None,
 ) -> Path:
     """Remove audio-only preroll caused by keyframe-aligned section downloads.
 
@@ -244,6 +288,14 @@ def normalize_partial_download(
         seek = max(0.0, video_start - format_start)
         temp_destination = _temporary_sibling(source)
         try:
+            if telemetry_callback:
+                telemetry_callback(
+                    {
+                        "stage": "download_normalize",
+                        "trim_seconds": seek,
+                        "percent": 100.0,
+                    }
+                )
             if log_callback:
                 log_callback("تسوية بداية الصوت والصورة بدون إعادة ترميز...")
             result = subprocess.run(
@@ -277,6 +329,15 @@ def normalize_partial_download(
                     log_callback("تعذر تسوية بداية المسارات؛ تم الاحتفاظ بالملف الأصلي.")
                 return source
             temp_destination.replace(source)
+            if telemetry_callback:
+                telemetry_callback(
+                    {
+                        "stage": "download_normalized",
+                        "trim_seconds": seek,
+                        "percent": 100.0,
+                        "output_size": source.stat().st_size,
+                    }
+                )
         finally:
             temp_destination.unlink(missing_ok=True)
     except Exception as exc:
@@ -376,6 +437,8 @@ def cut_silence(
     source: str | Path,
     destination: str | Path | None = None,
     status_callback: Callable[[str], None] | None = None,
+    telemetry_callback: Callable[[dict], None] | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> Path:
     source = Path(source).resolve()
     if not source.is_file():
@@ -389,13 +452,32 @@ def cut_silence(
     video_offset, audio_offset, duration = aligned_stream_window(info)
     if duration <= 0:
         raise ValueError("تعذر قراءة مدة الفيديو.")
+    if telemetry_callback:
+        video = next(stream for stream in streams if stream.get("codec_type") == "video")
+        audio = next(stream for stream in streams if stream.get("codec_type") == "audio")
+        format_info = info.get("format") or {}
+        telemetry_callback(
+            {
+                "stage": "silence_probe",
+                "percent": 0.0,
+                "duration": duration,
+                "source_size": source.stat().st_size,
+                "width": int(video.get("width") or 0),
+                "height": int(video.get("height") or 0),
+                "video_codec": str(video.get("codec_name") or "").upper(),
+                "audio_codec": str(audio.get("codec_name") or "").upper(),
+                "container": str(format_info.get("format_name") or "").split(",", 1)[0].upper(),
+            }
+        )
 
     if status_callback:
         status_callback("تحليل الصوت واكتشاف فترات الصمت...")
-    detection = subprocess.run(
-        [
+    detection_command = [
             str(ffmpeg),
             "-hide_banner",
+            "-nostats",
+            "-stats_period",
+            "0.25",
             "-i",
             str(source),
             "-vn",
@@ -405,21 +487,23 @@ def cut_silence(
                 f"atrim=start={audio_offset:.6f},asetpts=PTS-STARTPTS,"
                 f"silencedetect=n={SILENCE_THRESHOLD_DB}dB:d={SILENCE_MIN_SECONDS}"
             ),
+            "-progress",
+            "pipe:1",
             "-f",
             "null",
             "NUL" if os.name == "nt" else "/dev/null",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=_no_window_flag(),
+        ]
+    detection_return_code, detection_text = _run_ffmpeg_stream(
+        detection_command,
+        duration=duration,
+        stage="silence_analyze",
+        telemetry_callback=telemetry_callback,
+        log_callback=log_callback,
     )
-    if detection.returncode != 0:
-        raise RuntimeError(_last_lines(detection.stderr or "فشل تحليل الصمت."))
+    if detection_return_code != 0:
+        raise RuntimeError(_last_lines(detection_text or "فشل تحليل الصمت."))
 
-    intervals = parse_silence_intervals(detection.stderr)
+    intervals = parse_silence_intervals(detection_text)
     # If the file ends in silence, ffmpeg normally emits silence_end. Keep the
     # logic conservative if a build ever omits it: never invent a cut.
     keep_ranges = silence_to_keep_ranges(
@@ -427,6 +511,18 @@ def cut_silence(
         silence_intervals=intervals,
         margin=SILENCE_MARGIN_SECONDS,
     )
+    if telemetry_callback:
+        kept_duration = sum(end - start for start, end in keep_ranges)
+        telemetry_callback(
+            {
+                "stage": "silence_plan",
+                "percent": 100.0,
+                "duration": duration,
+                "silence_seconds": max(0.0, duration - kept_duration),
+                "kept_duration": kept_duration,
+                "interval_count": len(intervals),
+            }
+        )
     if not intervals or keep_ranges == [(0.0, round(duration, 6))]:
         if status_callback:
             status_callback("مفيش صمت يحتاج قص؛ بننسخ الملف كما هو...")
@@ -441,6 +537,15 @@ def cut_silence(
         except Exception:
             temp_destination.unlink(missing_ok=True)
             raise
+        if telemetry_callback:
+            telemetry_callback(
+                {
+                    "stage": "silence_done",
+                    "percent": 100.0,
+                    "duration": duration,
+                    "output_size": destination.stat().st_size,
+                }
+            )
         return destination
     if not keep_ranges:
         raise ValueError("الفيديو كله صمت تقريبًا؛ لم يتم إنشاء ملف فارغ.")
@@ -491,6 +596,9 @@ def cut_silence(
             str(ffmpeg),
             "-y",
             "-hide_banner",
+            "-nostats",
+            "-stats_period",
+            "0.25",
             "-i",
             str(source),
             "-filter_complex_script",
@@ -501,28 +609,113 @@ def cut_silence(
             "[aout]",
         ]
         command += _encoding_args_for_suffix(destination.suffix.lower())
+        command += ["-progress", "pipe:1"]
         command.append(str(temp_destination))
-        rendered = subprocess.run(
+        render_return_code, render_text = _run_ffmpeg_stream(
             command,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=_no_window_flag(),
+            duration=sum(end - start for start, end in keep_ranges),
+            stage="silence_render",
+            telemetry_callback=telemetry_callback,
+            log_callback=log_callback,
         )
         if (
-            rendered.returncode != 0
+            render_return_code != 0
             or not temp_destination.is_file()
             or temp_destination.stat().st_size <= 0
         ):
             temp_destination.unlink(missing_ok=True)
-            raise RuntimeError(_last_lines(rendered.stderr or "فشل قص الصمت."))
+            raise RuntimeError(_last_lines(render_text or "فشل قص الصمت."))
         temp_destination.replace(destination)
     finally:
         Path(script_handle.name).unlink(missing_ok=True)
         temp_destination.unlink(missing_ok=True)
+    if telemetry_callback:
+        telemetry_callback(
+            {
+                "stage": "silence_done",
+                "percent": 100.0,
+                "duration": duration,
+                "output_size": destination.stat().st_size,
+            }
+        )
     return destination
+
+
+def _run_ffmpeg_stream(
+    command: list[str],
+    *,
+    duration: float,
+    stage: str,
+    telemetry_callback: Callable[[dict], None] | None = None,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[int, str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        creationflags=_no_window_flag(),
+    )
+    state: dict[str, str] = {}
+    lines: list[str] = []
+    progress_keys = {
+        "frame",
+        "fps",
+        "bitrate",
+        "total_size",
+        "out_time_us",
+        "out_time_ms",
+        "out_time",
+        "speed",
+        "progress",
+    }
+    assert process.stdout is not None
+    for raw_line in process.stdout:
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        lines.append(line)
+        key, separator, value = line.partition("=")
+        if separator and key in progress_keys:
+            state[key] = value.strip()
+            if key == "progress" and telemetry_callback:
+                telemetry_callback(_ffmpeg_telemetry_event(state, duration=duration, stage=stage))
+            continue
+        if log_callback and ("silence_" in line or "error" in line.lower() or "warning" in line.lower()):
+            log_callback(line)
+    return process.wait(), "\n".join(lines)
+
+
+def _ffmpeg_telemetry_event(state: dict[str, str], *, duration: float, stage: str) -> dict:
+    out_time = 0.0
+    for key in ("out_time_us", "out_time_ms"):
+        value = _optional_float(state.get(key))
+        if value is not None:
+            out_time = max(0.0, value / 1_000_000.0)
+            break
+    speed_text = str(state.get("speed") or "").strip()
+    speed_factor = _optional_float(speed_text.rstrip("x"))
+    percent = min(100.0, max(0.0, out_time / duration * 100.0)) if duration > 0 else 0.0
+    eta = None
+    if speed_factor and speed_factor > 0 and duration > out_time:
+        eta = (duration - out_time) / speed_factor
+    return {
+        "stage": stage,
+        "percent": percent,
+        "out_time": out_time,
+        "duration": duration,
+        "frame": _optional_float(state.get("frame")),
+        "fps": _optional_float(state.get("fps")),
+        "bitrate": str(state.get("bitrate") or "").strip(),
+        "total_size": _optional_float(state.get("total_size")),
+        "speed_text": speed_text,
+        "speed_factor": speed_factor,
+        "eta_seconds": eta,
+        "progress": str(state.get("progress") or "").strip(),
+    }
 
 
 def _probe(ffprobe: str | Path, source: Path) -> dict:
@@ -556,6 +749,17 @@ def _probe(ffprobe: str | Path, source: Path) -> dict:
 def _last_lines(text: str, count: int = 8) -> str:
     lines = [line.strip() for line in str(text).splitlines() if line.strip()]
     return "\n".join(lines[-count:]) or "حدث خطأ غير معروف."
+
+
+def _optional_float(value) -> float | None:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"na", "n/a", "none", "unknown"}:
+        return None
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _temporary_sibling(destination: Path) -> Path:

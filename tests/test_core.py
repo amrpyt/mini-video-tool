@@ -4,11 +4,13 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core import (
+    _ffmpeg_telemetry_event,
     aligned_stream_window,
     build_download_command,
     default_silence_destination,
     normalize_partial_download,
     parse_download_progress,
+    parse_download_telemetry,
     parse_silence_intervals,
     parse_timecode,
     silence_to_keep_ranges,
@@ -40,6 +42,10 @@ class DownloadCommandTests(unittest.TestCase):
         self.assertIn("--download-sections", command)
         self.assertIn("--progress", command)
         self.assertIn("--newline", command)
+        progress_template = command[command.index("--progress-template") + 1]
+        self.assertIn("progress.downloaded_bytes", progress_template)
+        self.assertIn("progress.total_bytes_estimate", progress_template)
+        self.assertIn("progress.speed", progress_template)
         section = command[command.index("--download-sections") + 1]
         self.assertEqual(section, "*00:01:05-00:02:05")
         self.assertIn("height<=720", command[command.index("-f") + 1])
@@ -52,6 +58,17 @@ class DownloadCommandTests(unittest.TestCase):
             parse_download_progress("PROGRESS:42.5|1.2MiB/s|00:08"),
             (42.5, "1.2MiB/s", "00:08"),
         )
+
+    def test_parses_rich_download_telemetry_and_na(self):
+        telemetry = parse_download_telemetry(
+            "PROGRESS:42.5|1.2MiB/s|00:08|1048576|2097152|NA|3.5|1258291.2"
+        )
+        self.assertEqual(telemetry["percent"], 42.5)
+        self.assertEqual(telemetry["downloaded_bytes"], 1048576.0)
+        self.assertEqual(telemetry["total_bytes"], 2097152.0)
+        self.assertIsNone(telemetry["total_bytes_estimate"])
+        self.assertEqual(telemetry["elapsed"], 3.5)
+        self.assertAlmostEqual(telemetry["speed"], 1258291.2)
 
     def test_normalizes_audio_preroll_with_stream_copy_only(self):
         info = {
@@ -83,6 +100,23 @@ class DownloadCommandTests(unittest.TestCase):
 
 
 class SilenceTests(unittest.TestCase):
+    def test_ffmpeg_telemetry_has_real_percent_eta_and_size(self):
+        event = _ffmpeg_telemetry_event(
+            {
+                "out_time_us": "2500000",
+                "fps": "29.97",
+                "speed": "1.5x",
+                "total_size": "1048576",
+                "bitrate": "3355.4kbits/s",
+                "progress": "continue",
+            },
+            duration=10.0,
+            stage="silence_analyze",
+        )
+        self.assertAlmostEqual(event["percent"], 25.0)
+        self.assertAlmostEqual(event["eta_seconds"], 5.0)
+        self.assertAlmostEqual(event["fps"], 29.97)
+        self.assertEqual(event["total_size"], 1048576.0)
     def test_aligns_mismatched_stream_starts_before_silence_cut(self):
         info = {
             "streams": [

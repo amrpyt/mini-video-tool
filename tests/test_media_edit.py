@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from media_edit import (
+    _ffmpeg_telemetry_event,
     Overlay,
     build_caption_download_command,
     build_render_command,
@@ -97,6 +98,24 @@ class CaptionTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_render_telemetry_parses_ffmpeg_block(self):
+        event = _ffmpeg_telemetry_event(
+            {
+                "out_time_us": "2500000",
+                "fps": "29.97",
+                "speed": "1.5x",
+                "total_size": "1048576",
+                "bitrate": "3355.4kbits/s",
+                "progress": "continue",
+            },
+            duration=10.0,
+            stage="render",
+        )
+        self.assertAlmostEqual(event["percent"], 25.0)
+        self.assertAlmostEqual(event["eta_seconds"], 5.0)
+        self.assertAlmostEqual(event["fps"], 29.97)
+        self.assertEqual(event["total_size"], 1048576.0)
+
     def test_preview_decodes_before_seeking_for_partial_downloads(self):
         with tempfile.TemporaryDirectory() as tmp:
             destination = Path(tmp) / "preview.png"

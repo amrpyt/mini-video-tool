@@ -6,6 +6,7 @@ import tempfile
 import threading
 import tkinter as tk
 import queue
+import time
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -97,24 +98,40 @@ class MiniVideoTool(tk.Tk):
         self.video_duration = 0.0
         self.preview_generation = 0
         self.preview_rect = (0.0, 0.0, 1.0, 1.0)
+        self.operation_active = False
+        self.operation_title = ""
+        self.operation_started_at: float | None = None
+        self.operation_eta_seconds: float | None = None
+        self.operation_eta_label = "العملية"
+        self.operation_output_dir: Path | None = None
+        self.operation_output_bytes: float | None = None
+        self.operation_size_label = "حجم الناتج"
+        self.operation_requested_duration: float | None = None
+        self.operation_last_disk_check = 0.0
+        self.download_accumulated_bytes = 0.0
+        self.download_transfer_peak = 0.0
+        self.download_last_bytes = 0.0
         self.temp_root = Path(tempfile.gettempdir()) / "MiniVideoTool"
         self.temp_root.mkdir(parents=True, exist_ok=True)
 
         self.title(APP_TITLE)
-        self.geometry("1120x820")
-        self.minsize(940, 700)
+        self.geometry("1180x900")
+        self.minsize(1000, 760)
         self.configure(bg="#f4f4f4")
         self.option_add("*Font", ("Segoe UI", 10))
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(40, self._drain_ui_queue)
+        self.after(500, self._tick_operation_clock)
 
     def _build(self) -> None:
         outer = ttk.Frame(self, padding=16)
         outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
 
         header = ttk.Frame(outer)
-        header.pack(fill="x")
+        header.grid(row=0, column=0, sticky="ew")
         ttk.Label(header, text="Mini Video Tool", font=("Segoe UI Semibold", 19)).pack(anchor="e")
         ttk.Label(
             header,
@@ -123,7 +140,7 @@ class MiniVideoTool(tk.Tk):
         ).pack(anchor="e", pady=(2, 10))
 
         self.tabs = ttk.Notebook(outer)
-        self.tabs.pack(fill="both", expand=True)
+        self.tabs.grid(row=1, column=0, sticky="nsew")
         download_tab = ttk.Frame(self.tabs, padding=16)
         silence_tab = ttk.Frame(self.tabs, padding=16)
         editor_tab = ttk.Frame(self.tabs, padding=12)
@@ -332,16 +349,196 @@ class MiniVideoTool(tk.Tk):
         self.render_button.pack(fill="x", ipady=6, pady=(10, 0))
 
     def _build_activity(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text="اللي بيحصل دلوقتي", padding=(10, 8))
-        box.pack(fill="x", pady=(10, 0))
-        top = ttk.Frame(box)
-        top.pack(fill="x")
+        box = tk.Frame(parent, bg="#0b1220", padx=12, pady=10, bd=0)
+        self.ops_box = box
+        box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
+        header = tk.Frame(box, bg="#0b1220")
+        header.pack(fill="x")
         self.activity_var = tk.StringVar(value="جاهز")
-        ttk.Label(top, textvariable=self.activity_var).pack(side="right")
-        self.progress = ttk.Progressbar(top, mode="determinate", maximum=100, value=0)
-        self.progress.pack(side="left", fill="x", expand=True, padx=(0, 12))
-        self.log_text = tk.Text(box, height=4, wrap="word", state="disabled", bg="#fafafa", relief="flat")
-        self.log_text.pack(fill="x", pady=(7, 0))
+        self.activity_detail_var = tk.StringVar(value="لا توجد عملية نشطة")
+        self.activity_percent_var = tk.StringVar(value="—")
+        tk.Label(
+            header,
+            text="●",
+            fg="#22c55e",
+            bg="#0b1220",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(side="right")
+        title_box = tk.Frame(header, bg="#0b1220")
+        title_box.pack(side="right", padx=(6, 0))
+        tk.Label(
+            title_box,
+            textvariable=self.activity_var,
+            fg="#f8fafc",
+            bg="#0b1220",
+            font=("Segoe UI Semibold", 11),
+            anchor="e",
+        ).pack(anchor="e")
+        tk.Label(
+            title_box,
+            textvariable=self.activity_detail_var,
+            fg="#94a3b8",
+            bg="#0b1220",
+            font=("Segoe UI", 9),
+            anchor="e",
+        ).pack(anchor="e")
+        tk.Label(
+            header,
+            textvariable=self.activity_percent_var,
+            fg="#86efac",
+            bg="#0b1220",
+            font=("Segoe UI Semibold", 17),
+        ).pack(side="left")
+
+        style = ttk.Style(self)
+        style.configure(
+            "Ops.Horizontal.TProgressbar",
+            troughcolor="#1f2937",
+            background="#22c55e",
+            bordercolor="#1f2937",
+            lightcolor="#22c55e",
+            darkcolor="#22c55e",
+            thickness=9,
+        )
+        self.progress = ttk.Progressbar(
+            box,
+            style="Ops.Horizontal.TProgressbar",
+            mode="determinate",
+            maximum=100,
+            value=0,
+        )
+        self.progress.pack(fill="x", pady=(8, 8))
+
+        metrics = tk.Frame(box, bg="#0b1220")
+        metrics.pack(fill="x")
+        for column in range(3):
+            metrics.columnconfigure(column, weight=1, uniform="metric")
+        self.telemetry_time_var, self.telemetry_time_detail_var = self._telemetry_card(
+            metrics, 0, "الوقت", "00:00", "منقضي"
+        )
+        self.telemetry_transfer_var, self.telemetry_transfer_detail_var = self._telemetry_card(
+            metrics, 1, "بيانات التحميل", "—", "لا يوجد نقل"
+        )
+        self.telemetry_output_var, self.telemetry_output_detail_var = self._telemetry_card(
+            metrics, 2, "التخزين", "—", "المساحة الحرة —"
+        )
+        self.telemetry_segment_var, self.telemetry_segment_detail_var = self._telemetry_card(
+            metrics, 3, "المقطع", "—", "لا يوجد مقطع"
+        )
+        self.telemetry_media_var, self.telemetry_media_detail_var = self._telemetry_card(
+            metrics, 4, "الوسائط", "—", "لا توجد معلومات"
+        )
+        self.telemetry_engine_var, self.telemetry_engine_detail_var = self._telemetry_card(
+            metrics, 5, "المحرك", "—", "في الانتظار"
+        )
+
+        footer = tk.Frame(box, bg="#0b1220")
+        footer.pack(fill="x", pady=(8, 0))
+        self.stage_rail_var = tk.StringVar(value="تهيئة  ›  تنفيذ  ›  معالجة  ›  جاهز")
+        self.telemetry_file_var = tk.StringVar(value="الملف: —")
+        self.log_visible = False
+        self.log_toggle_button = tk.Button(
+            footer,
+            text="عرض السجل",
+            command=self._toggle_log,
+            bg="#1f2937",
+            fg="#cbd5e1",
+            activebackground="#334155",
+            activeforeground="#f8fafc",
+            relief="flat",
+            bd=0,
+            padx=8,
+            pady=2,
+            font=("Segoe UI", 8),
+        )
+        self.log_toggle_button.pack(side="left", padx=(0, 8))
+        tk.Label(
+            footer,
+            textvariable=self.stage_rail_var,
+            fg="#64748b",
+            bg="#0b1220",
+            font=("Segoe UI", 8),
+        ).pack(side="left")
+        tk.Label(
+            footer,
+            textvariable=self.telemetry_file_var,
+            fg="#cbd5e1",
+            bg="#0b1220",
+            font=("Segoe UI", 8),
+            anchor="e",
+        ).pack(side="right")
+
+        self.log_text = tk.Text(
+            box,
+            height=4,
+            wrap="word",
+            state="disabled",
+            bg="#111827",
+            fg="#cbd5e1",
+            insertbackground="#cbd5e1",
+            relief="flat",
+            bd=0,
+            font=("Cascadia Mono", 8),
+        )
+
+    def _toggle_log(self) -> None:
+        self.log_visible = not self.log_visible
+        if self.log_visible:
+            self.log_text.pack(fill="x", pady=(6, 0))
+            self.log_toggle_button.configure(text="إخفاء السجل")
+        else:
+            self.log_text.pack_forget()
+            self.log_toggle_button.configure(text="عرض السجل")
+
+    def _telemetry_card(
+        self,
+        parent: tk.Frame,
+        column: int,
+        title: str,
+        initial: str,
+        detail: str,
+    ) -> tuple[tk.StringVar, tk.StringVar]:
+        row, grid_column = divmod(column, 3)
+        card = tk.Frame(parent, bg="#111827", padx=9, pady=5)
+        card.grid(
+            row=row,
+            column=grid_column,
+            sticky="nsew",
+            padx=(0 if grid_column == 0 else 3, 0),
+            pady=(0 if row == 0 else 3, 0),
+        )
+        main_var = tk.StringVar(value=initial)
+        detail_var = tk.StringVar(value=detail)
+        tk.Label(
+            card,
+            text=title,
+            fg="#64748b",
+            bg="#111827",
+            font=("Segoe UI", 8),
+            anchor="e",
+        ).pack(fill="x")
+        tk.Label(
+            card,
+            textvariable=main_var,
+            fg="#f8fafc",
+            bg="#111827",
+            font=("Segoe UI Semibold", 10),
+            anchor="e",
+            wraplength=280,
+            justify="right",
+        ).pack(fill="x", pady=(1, 0))
+        tk.Label(
+            card,
+            textvariable=detail_var,
+            fg="#94a3b8",
+            bg="#111827",
+            font=("Segoe UI", 7),
+            anchor="e",
+            wraplength=280,
+            justify="right",
+        ).pack(fill="x")
+        return main_var, detail_var
 
     @staticmethod
     def _label(parent: ttk.Frame, text: str) -> ttk.Label:
@@ -405,6 +602,16 @@ class MiniVideoTool(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
             return
 
+        self._begin_operation(
+            title="تحميل جزء من يوتيوب",
+            detail=f"{quality} • {self._format_short_time(start)} ← {self._format_short_time(end)}",
+            output_dir=output,
+            segment=(start, end),
+            media_label=quality,
+            engine_label="yt-dlp",
+            stage_rail="تهيئة  ›  تحميل  ›  تسوية  ›  كابشن  ›  جاهز",
+        )
+
         def work():
             self._thread_status("تحميل الجزء المطلوب فقط من يوتيوب...", indeterminate=True)
             video = download_section(
@@ -415,9 +622,11 @@ class MiniVideoTool(tk.Tk):
                 end=end,
                 quality=quality,
                 output_dir=output,
-                progress_callback=self._thread_download_progress,
+                telemetry_callback=self._thread_download_telemetry,
                 log_callback=self._thread_log,
             )
+            self._thread_status("فحص الملف النهائي...", indeterminate=True)
+            info = probe_media(ffprobe, video)
             caption_file = None
             if want_captions:
                 self._thread_status("تحميل كابشن يوتيوب العربي...", indeterminate=True)
@@ -430,7 +639,6 @@ class MiniVideoTool(tk.Tk):
                         log_callback=self._thread_log,
                     )
                     if srt:
-                        info = probe_media(ffprobe, video)
                         width, height, _duration = video_geometry(info)
                         caption_start, caption_end = section_caption_window(
                             info,
@@ -450,12 +658,13 @@ class MiniVideoTool(tk.Tk):
                         self._thread_log(f"الكابشن جاهز: {caption_file.name}")
                     else:
                         self._thread_log("مفيش كابشن عربي متاح للفيديو ده.")
-            return video, caption_file
+            return video, caption_file, info
 
         self._start_job("جاري التحميل...", work, self._download_finished, indeterminate=True)
 
     def _download_finished(self, result) -> None:
-        video, caption_file = result
+        video, caption_file, info = result
+        self._apply_media_info(info, video)
         self.editor_source_var.set(str(video))
         if caption_file:
             self.caption_file_var.set(str(caption_file))
@@ -463,7 +672,7 @@ class MiniVideoTool(tk.Tk):
         else:
             self.caption_file_var.set("")
             self.captions_enabled_var.set(False)
-        self._load_editor_source(video, extract_now=False)
+        self._load_editor_source(video, extract_now=False, prefetched_info=info)
         messagebox.showinfo(APP_TITLE, f"تم التحميل.\n{video}")
 
     def _cut_silence(self) -> None:
@@ -479,6 +688,16 @@ class MiniVideoTool(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
             return
 
+        self._begin_operation(
+            title="قص الصمت",
+            detail=source.name,
+            output_dir=source.parent,
+            media_label=source.suffix.lstrip(".").upper() or "فيديو",
+            engine_label="FFmpeg",
+            stage_rail="فحص  ›  تحليل الصمت  ›  خطة القص  ›  إعادة بناء  ›  جاهز",
+            source=source,
+        )
+
         def work():
             self._thread_status("تحليل الصمت...", indeterminate=True)
             return cut_silence(
@@ -486,14 +705,27 @@ class MiniVideoTool(tk.Tk):
                 ffprobe=ffprobe,
                 source=source,
                 status_callback=lambda text: self._thread_status(text, indeterminate=True),
+                telemetry_callback=self._thread_ffmpeg_telemetry,
+                log_callback=self._thread_log,
             )
 
         self._start_job("تحليل الصمت...", work, self._silence_finished, indeterminate=True)
 
     def _silence_finished(self, result: Path) -> None:
+        self.operation_output_bytes = float(result.stat().st_size)
+        self.operation_size_label = "حجم الناتج"
+        self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+        self.telemetry_file_var.set(f"الملف: {self._short_text(result.name)}")
+        self._update_disk_metric(force=True)
         messagebox.showinfo(APP_TITLE, f"تم قص الصمت.\n{result}")
 
-    def _load_editor_source(self, source: Path, *, extract_now: bool = True) -> None:
+    def _load_editor_source(
+        self,
+        source: Path,
+        *,
+        extract_now: bool = True,
+        prefetched_info: dict | None = None,
+    ) -> None:
         self.preview_generation += 1
         self.preview_original = None
         self.preview_photo = None
@@ -510,11 +742,24 @@ class MiniVideoTool(tk.Tk):
         self._redraw_canvas()
         source = Path(source).resolve()
         generation = self.preview_generation
+        if prefetched_info is not None:
+            width, height, duration = video_geometry(prefetched_info)
+            self._editor_source_loaded((source, generation, width, height, duration, extract_now))
+            return
         try:
             ffprobe = binary("ffprobe.exe")
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
+        self._begin_operation(
+            title="قراءة معلومات الفيديو",
+            detail=source.name,
+            output_dir=source.parent,
+            media_label=source.suffix.lstrip(".").upper() or "فيديو",
+            engine_label="ffprobe",
+            stage_rail="فتح الملف  ›  قراءة المسارات  ›  تجهيز المعاينة  ›  جاهز",
+            source=source,
+        )
 
         def work():
             info = probe_media(ffprobe, source)
@@ -533,6 +778,14 @@ class MiniVideoTool(tk.Tk):
             self._log("تم تجاهل معلومات فيديو قديمة لأن المصدر اتغير.")
             return
         self.video_width, self.video_height, self.video_duration = width, height, duration
+        self.telemetry_media_var.set(f"{width}×{height}")
+        self.telemetry_media_detail_var.set(f"مدة {self._format_duration(duration)}")
+        if source.is_file():
+            self.operation_output_bytes = float(source.stat().st_size)
+            self.operation_size_label = "حجم المصدر"
+            self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+            self.telemetry_file_var.set(f"الملف: {self._short_text(source.name)}")
+            self._update_disk_metric(force=True)
         self.preview_scale.configure(to=max(0.001, duration))
         self.preview_time_var.set(0.0)
         self._update_preview_time_text()
@@ -551,6 +804,16 @@ class MiniVideoTool(tk.Tk):
         source_identity = source.resolve()
         ffmpeg = binary("ffmpeg.exe")
         destination = self.temp_root / "preview.png"
+
+        self._begin_operation(
+            title="استخراج لقطة المعاينة",
+            detail=f"{source.name} • عند {self._format_short_time(timestamp)}",
+            output_dir=source.parent,
+            media_label=f"{self.video_width}×{self.video_height}" if self.video_width else source.suffix.upper(),
+            engine_label="FFmpeg",
+            stage_rail="فتح الفيديو  ›  الوصول للتوقيت  ›  استخراج لقطة  ›  جاهز",
+            source=source,
+        )
 
         def work():
             self._thread_status(f"استخراج لقطة عند {self._format_short_time(timestamp)}...", indeterminate=True)
@@ -701,6 +964,17 @@ class MiniVideoTool(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
             return
 
+        self._begin_operation(
+            title="إخراج الفيديو",
+            detail=f"{source.name} • {len(overlays)} عنصر",
+            output_dir=destination.parent,
+            segment=(0.0, self.video_duration) if self.video_duration > 0 else None,
+            media_label=f"{self.video_width}×{self.video_height}" if self.video_width else source.suffix.upper(),
+            engine_label="FFmpeg",
+            stage_rail="فحص  ›  تركيب العناصر  ›  ترميز  ›  إنهاء  ›  جاهز",
+            source=source,
+        )
+
         def work():
             self._thread_status("إخراج الفيديو بالإضافات...", indeterminate=False)
             return render_video(
@@ -712,13 +986,18 @@ class MiniVideoTool(tk.Tk):
                 font_dir=font_dir,
                 caption_font_family=caption_family,
                 destination=destination,
-                progress_callback=self._thread_render_progress,
+                telemetry_callback=self._thread_ffmpeg_telemetry,
                 log_callback=self._thread_log,
             )
 
         self._start_job("إخراج الفيديو...", work, self._render_finished)
 
     def _render_finished(self, result: Path) -> None:
+        self.operation_output_bytes = float(result.stat().st_size)
+        self.operation_size_label = "حجم الناتج"
+        self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+        self.telemetry_file_var.set(f"الملف: {self._short_text(result.name)}")
+        self._update_disk_metric(force=True)
         messagebox.showinfo(APP_TITLE, f"تم إخراج الفيديو.\n{result}")
 
     def _redraw_canvas(self) -> None:
@@ -893,11 +1172,298 @@ class MiniVideoTool(tk.Tk):
             video_height=self.video_height,
         )
 
+    def _begin_operation(
+        self,
+        *,
+        title: str,
+        detail: str,
+        output_dir: Path | None = None,
+        segment: tuple[float, float] | None = None,
+        media_label: str = "—",
+        engine_label: str = "—",
+        stage_rail: str = "تهيئة  ›  تنفيذ  ›  معالجة  ›  جاهز",
+        source: Path | None = None,
+    ) -> None:
+        self.operation_active = True
+        self.operation_title = title
+        self.operation_started_at = time.monotonic()
+        self.operation_eta_seconds = None
+        self.operation_eta_label = "العملية"
+        self.operation_output_dir = Path(output_dir).expanduser() if output_dir else None
+        self.operation_output_bytes = None
+        self.operation_size_label = "حجم الناتج"
+        self.operation_requested_duration = None
+        self.operation_last_disk_check = 0.0
+        self.download_accumulated_bytes = 0.0
+        self.download_transfer_peak = 0.0
+        self.download_last_bytes = 0.0
+        self.activity_detail_var.set(detail)
+        self.stage_rail_var.set(stage_rail)
+        self.telemetry_time_var.set("00:00")
+        self.telemetry_time_detail_var.set("منقضي")
+        self.telemetry_transfer_var.set("—")
+        self.telemetry_transfer_detail_var.set("لا يوجد نقل")
+        self.telemetry_output_var.set("—")
+        self.telemetry_output_detail_var.set("المساحة الحرة —")
+        self.telemetry_media_var.set(media_label or "—")
+        self.telemetry_media_detail_var.set("في انتظار معلومات الملف")
+        self.telemetry_engine_var.set(engine_label or "—")
+        self.telemetry_engine_detail_var.set("تهيئة")
+        self.telemetry_file_var.set(
+            f"الملف: {self._short_text(source.name)}" if source else "الملف: —"
+        )
+        if segment:
+            start, end = segment
+            self.operation_requested_duration = max(0.0, end - start)
+            self.telemetry_segment_var.set(
+                f"{self._format_short_time(start)} ← {self._format_short_time(end)}"
+            )
+            self.telemetry_segment_detail_var.set(
+                f"المدة المطلوبة {self._format_duration(self.operation_requested_duration)}"
+            )
+        else:
+            self.telemetry_segment_var.set("—")
+            self.telemetry_segment_detail_var.set("لا يوجد مقطع")
+        self._set_activity(title, percent=0)
+        self._update_disk_metric(force=True)
+        self._log(f"بدأت العملية: {title}")
+
+    def _thread_download_telemetry(self, telemetry: dict) -> None:
+        self._post_ui(self._apply_download_telemetry, telemetry)
+
+    def _apply_download_telemetry(self, telemetry: dict) -> None:
+        stage = str(telemetry.get("stage") or "download")
+        stage_names = {
+            "download": "تنزيل بيانات الوسائط من يوتيوب",
+            "download_normalize": "تسوية بداية الصوت والصورة بدون إعادة ترميز",
+            "download_normalized": "تمت تسوية المسارات",
+            "download_ready": "الملف النهائي جاهز",
+        }
+        percent = float(telemetry.get("percent") or 0.0)
+        self.activity_detail_var.set(stage_names.get(stage, "تنزيل بيانات الوسائط"))
+        self._set_activity(self.operation_title or "تحميل", percent=percent)
+
+        output_size = telemetry.get("output_size")
+        if isinstance(output_size, (int, float)) and output_size >= 0:
+            self.operation_output_bytes = float(output_size)
+            self.operation_size_label = "حجم الناتج"
+            self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+            self._update_disk_metric(force=True)
+        if stage.startswith("download_normal"):
+            trim = telemetry.get("trim_seconds")
+            self.telemetry_engine_var.set("FFmpeg • نسخ مباشر")
+            self.telemetry_engine_detail_var.set(
+                f"تسوية {float(trim):.2f} ث بدون إعادة ترميز"
+                if isinstance(trim, (int, float))
+                else "تسوية المسارات بدون إعادة ترميز"
+            )
+            return
+        if stage == "download_ready":
+            self.telemetry_engine_var.set("جاهز")
+            self.telemetry_engine_detail_var.set("انتهى تنزيل وتجهيز الملف")
+            return
+        self.activity_percent_var.set(f"النقل {percent:.1f}%")
+
+        downloaded = telemetry.get("downloaded_bytes")
+        if isinstance(downloaded, (int, float)) and downloaded >= 0:
+            downloaded = float(downloaded)
+            if self.download_last_bytes > 0 and downloaded < self.download_last_bytes * 0.5:
+                self.download_accumulated_bytes += self.download_transfer_peak
+                self.download_transfer_peak = 0.0
+            self.download_transfer_peak = max(self.download_transfer_peak, downloaded)
+            self.download_last_bytes = downloaded
+            received = self.download_accumulated_bytes + downloaded
+            self.telemetry_transfer_var.set(self._format_bytes(received))
+
+            exact_total = telemetry.get("total_bytes")
+            estimated_total = telemetry.get("total_bytes_estimate")
+            total = exact_total if isinstance(exact_total, (int, float)) else estimated_total
+            prefix = "" if isinstance(exact_total, (int, float)) else "~"
+            speed = telemetry.get("speed")
+            speed_text = (
+                f"{self._format_bytes(float(speed))}/ث"
+                if isinstance(speed, (int, float)) and speed > 0
+                else str(telemetry.get("speed_text") or "—").strip()
+            )
+            if isinstance(total, (int, float)) and total > 0:
+                self.telemetry_transfer_detail_var.set(
+                    f"{speed_text} • النقل الحالي {self._format_bytes(downloaded)} / {prefix}{self._format_bytes(float(total))}"
+                )
+            else:
+                self.telemetry_transfer_detail_var.set(f"{speed_text} • وسائط مستلمة فعليًا")
+
+        eta = self._parse_eta_text(str(telemetry.get("eta_text") or ""))
+        self.operation_eta_seconds = eta
+        self.operation_eta_label = "النقل الحالي"
+        speed_text = str(telemetry.get("speed_text") or "").strip()
+        self.telemetry_engine_var.set("yt-dlp")
+        self.telemetry_engine_detail_var.set(
+            f"سرعة {speed_text}" if speed_text and "Unknown" not in speed_text else "نقل مباشر من يوتيوب"
+        )
+
+    def _thread_ffmpeg_telemetry(self, telemetry: dict) -> None:
+        self._post_ui(self._apply_ffmpeg_telemetry, telemetry)
+
+    def _apply_ffmpeg_telemetry(self, telemetry: dict) -> None:
+        stage = str(telemetry.get("stage") or "")
+        stage_names = {
+            "silence_probe": "فحص الفيديو والصوت",
+            "silence_analyze": "تحليل الصمت لحظيًا",
+            "silence_plan": "حساب خطة القص",
+            "silence_render": "إعادة بناء الفيديو بدون الصمت",
+            "silence_done": "تم قص الصمت",
+            "render": "تركيب العناصر وترميز الفيديو",
+            "render_done": "تم إخراج الفيديو",
+        }
+        if stage in stage_names:
+            self.activity_detail_var.set(stage_names[stage])
+
+        percent = telemetry.get("percent")
+        if isinstance(percent, (int, float)):
+            self._set_activity(self.operation_title or "معالجة", percent=float(percent))
+
+        eta = telemetry.get("eta_seconds")
+        self.operation_eta_seconds = float(eta) if isinstance(eta, (int, float)) else None
+        self.operation_eta_label = "المعالجة"
+
+        if stage == "silence_probe":
+            duration = float(telemetry.get("duration") or 0.0)
+            width = int(telemetry.get("width") or 0)
+            height = int(telemetry.get("height") or 0)
+            container = str(telemetry.get("container") or "").upper()
+            vcodec = str(telemetry.get("video_codec") or "—")
+            acodec = str(telemetry.get("audio_codec") or "—")
+            self.telemetry_media_var.set(
+                f"{width}×{height} • {container}" if width and height else (container or "فيديو")
+            )
+            self.telemetry_media_detail_var.set(
+                f"{vcodec} + {acodec} • {self._format_duration(duration)}"
+            )
+            source_size = telemetry.get("source_size")
+            if isinstance(source_size, (int, float)):
+                self.telemetry_output_var.set(self._format_bytes(float(source_size)))
+                self.operation_size_label = "حجم المصدر"
+
+        if stage == "silence_plan":
+            removed = float(telemetry.get("silence_seconds") or 0.0)
+            kept = float(telemetry.get("kept_duration") or 0.0)
+            intervals = int(telemetry.get("interval_count") or 0)
+            self.telemetry_segment_var.set(f"حذف {self._format_duration(removed)}")
+            self.telemetry_segment_detail_var.set(
+                f"متبقي {self._format_duration(kept)} • {intervals} منطقة صمت"
+            )
+
+        out_time = telemetry.get("out_time")
+        duration = telemetry.get("duration")
+        if isinstance(out_time, (int, float)) and isinstance(duration, (int, float)) and duration > 0:
+            self.telemetry_segment_var.set(
+                f"{self._format_duration(float(out_time))} / {self._format_duration(float(duration))}"
+            )
+            self.telemetry_segment_detail_var.set("زمن الوسائط المعالج")
+
+        total_size = telemetry.get("total_size")
+        output_size = telemetry.get("output_size")
+        current_size = output_size if isinstance(output_size, (int, float)) else total_size
+        if isinstance(current_size, (int, float)) and current_size >= 0:
+            self.operation_output_bytes = float(current_size)
+            self.operation_size_label = "حجم الناتج"
+            self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+
+        speed_text = str(telemetry.get("speed_text") or "").strip()
+        speed_factor = telemetry.get("speed_factor")
+        fps = telemetry.get("fps")
+        bitrate = str(telemetry.get("bitrate") or "").strip()
+        display_speed = (
+            f"×{float(speed_factor):.2f}"
+            if isinstance(speed_factor, (int, float)) and speed_factor > 0
+            else speed_text.replace("x", "×")
+        )
+        engine_main = display_speed if display_speed else "FFmpeg"
+        if isinstance(fps, (int, float)) and fps > 0:
+            engine_main = f"{display_speed or 'FFmpeg'} • {float(fps):.1f} إطار/ث"
+        self.telemetry_engine_var.set(engine_main)
+        bitrate_display = bitrate.replace("kbits/s", "كبت/ث").replace("Mbits/s", "مبت/ث")
+        self.telemetry_engine_detail_var.set(
+            f"معدل البت {bitrate_display}" if bitrate_display and bitrate_display != "N/A" else "معالجة محلية"
+        )
+        self._update_disk_metric()
+
+    def _apply_media_info(self, info: dict, path: Path) -> None:
+        streams = info.get("streams") or []
+        video = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+        audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+        format_info = info.get("format") or {}
+        width = int(video.get("width") or 0)
+        height = int(video.get("height") or 0)
+        duration = float(format_info.get("duration") or 0.0)
+        container = str(format_info.get("format_name") or path.suffix.lstrip(".")).split(",", 1)[0].upper()
+        vcodec = str(video.get("codec_name") or "—").upper()
+        acodec = str(audio.get("codec_name") or "—").upper()
+        self.telemetry_media_var.set(
+            f"{width}×{height} • {container}" if width and height else container
+        )
+        self.telemetry_media_detail_var.set(
+            f"{vcodec} + {acodec} • {self._format_duration(duration)}"
+        )
+        if self.operation_requested_duration is not None:
+            self.telemetry_segment_detail_var.set(
+                f"مطلوب {self._format_duration(self.operation_requested_duration)} • فعلي {self._format_duration(duration)}"
+            )
+        if path.is_file():
+            self.operation_output_bytes = float(path.stat().st_size)
+            self.operation_size_label = "حجم الناتج"
+            self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+            self.telemetry_file_var.set(f"الملف: {self._short_text(path.name)}")
+        self._update_disk_metric(force=True)
+
+    def _tick_operation_clock(self) -> None:
+        if getattr(self, "operation_active", False) and self.operation_started_at is not None:
+            elapsed = max(0.0, time.monotonic() - self.operation_started_at)
+            self.telemetry_time_var.set(self._format_duration(elapsed))
+            if self.operation_eta_seconds is not None:
+                self.telemetry_time_detail_var.set(
+                    f"منقضي • باقي {self.operation_eta_label} {self._format_duration(self.operation_eta_seconds)}"
+                )
+            else:
+                self.telemetry_time_detail_var.set("منقضي • المتبقي غير معروف بعد")
+            self._update_disk_metric()
+        if self.winfo_exists():
+            self.after(500, self._tick_operation_clock)
+
+    def _update_disk_metric(self, *, force: bool = False) -> None:
+        if self.operation_output_dir is None:
+            return
+        now = time.monotonic()
+        if not force and now - self.operation_last_disk_check < 1.0:
+            return
+        self.operation_last_disk_check = now
+        probe = self.operation_output_dir
+        try:
+            while not probe.exists() and probe.parent != probe:
+                probe = probe.parent
+            free = shutil.disk_usage(probe).free
+        except OSError:
+            return
+        if self.operation_output_bytes is not None:
+            self.telemetry_output_var.set(self._format_bytes(self.operation_output_bytes))
+            self.telemetry_output_detail_var.set(
+                f"{self.operation_size_label} • حر {self._format_bytes(float(free))}"
+            )
+        else:
+            self.telemetry_output_detail_var.set(f"حر {self._format_bytes(float(free))}")
+
     def _start_job(self, label: str, target, on_success, *, indeterminate: bool = False) -> None:
         if self.busy:
             return
+        if not self.operation_active:
+            self._begin_operation(
+                title=label,
+                detail=label,
+                engine_label="FFmpeg" if "لقطة" in label or "فيديو" in label else "—",
+            )
         self._set_busy(True)
-        self._set_activity(label, indeterminate=indeterminate)
+        self.activity_detail_var.set(label)
+        self._set_activity(self.operation_title or label, indeterminate=indeterminate)
 
         def runner() -> None:
             try:
@@ -911,13 +1477,27 @@ class MiniVideoTool(tk.Tk):
         threading.Thread(target=runner, daemon=True).start()
 
     def _job_succeeded(self, result, on_success) -> None:
+        elapsed = None
+        if self.operation_started_at is not None:
+            elapsed = max(0.0, time.monotonic() - self.operation_started_at)
+        self.operation_active = False
         self._set_busy(False)
         self._set_activity("تم ✓", percent=100)
-        on_success(result)
+        self.activity_detail_var.set(self.operation_title or "اكتملت العملية")
+        self.operation_eta_seconds = 0.0
+        if elapsed is not None:
+            self.telemetry_time_var.set(self._format_duration(elapsed))
+            self.telemetry_time_detail_var.set("إجمالي زمن العملية")
+        try:
+            on_success(result)
+        except Exception as exc:
+            self._job_failed(str(exc))
 
     def _job_failed(self, error: str) -> None:
+        self.operation_active = False
         self._set_busy(False)
         self._set_activity("حصل خطأ", percent=0)
+        self.activity_detail_var.set(self.operation_title or "فشلت العملية")
         self._log(error)
         messagebox.showerror(APP_TITLE, error)
 
@@ -937,11 +1517,14 @@ class MiniVideoTool(tk.Tk):
         if indeterminate:
             self.progress.configure(mode="indeterminate")
             self.progress.start(12)
+            self.activity_percent_var.set("…")
         else:
             self.progress.stop()
             self.progress.configure(mode="determinate")
             if percent is not None:
-                self.progress["value"] = max(0, min(100, percent))
+                value = max(0, min(100, percent))
+                self.progress["value"] = value
+                self.activity_percent_var.set(f"{value:.1f}%")
 
     def _thread_status(self, text: str, *, indeterminate: bool = False) -> None:
         self._post_ui(self._set_activity_from_queue, text, indeterminate)
@@ -962,7 +1545,8 @@ class MiniVideoTool(tk.Tk):
         self._post_ui(self._log, text)
 
     def _set_activity_from_queue(self, text: str, indeterminate: bool) -> None:
-        self._set_activity(text, indeterminate=indeterminate)
+        self.activity_detail_var.set(text)
+        self._set_activity(self.operation_title or text, indeterminate=indeterminate)
 
     def _set_activity_percent(self, text: str, percent: float) -> None:
         self._set_activity(text, percent=percent)
@@ -974,18 +1558,25 @@ class MiniVideoTool(tk.Tk):
         try:
             while True:
                 callback, args = self.ui_queue.get_nowait()
-                callback(*args)
+                try:
+                    callback(*args)
+                except Exception as exc:
+                    try:
+                        self._log(f"خطأ في تحديث الواجهة: {exc}")
+                    except Exception:
+                        pass
         except queue.Empty:
             pass
-        if self.winfo_exists():
-            self.after(40, self._drain_ui_queue)
+        finally:
+            if self.winfo_exists():
+                self.after(40, self._drain_ui_queue)
 
     def _log(self, text: str) -> None:
         clean = str(text).strip()
         if not clean:
             return
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", clean + "\n")
+        self.log_text.insert("end", f"[{time.strftime('%H:%M:%S')}] {clean}\n")
         line_count = int(self.log_text.index("end-1c").split(".")[0])
         if line_count > 80:
             self.log_text.delete("1.0", f"{line_count - 80}.0")
@@ -1015,6 +1606,56 @@ class MiniVideoTool(tk.Tk):
         if hours:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total = max(0, round(float(seconds)))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _format_bytes(value: float) -> str:
+        number = max(0.0, float(value))
+        units = ("بايت", "ك.ب", "م.ب", "ج.ب", "ت.ب")
+        index = 0
+        while number >= 1024 and index < len(units) - 1:
+            number /= 1024.0
+            index += 1
+        if index == 0:
+            return f"{number:.0f} {units[index]}"
+        if number >= 100:
+            return f"{number:.0f} {units[index]}"
+        if number >= 10:
+            return f"{number:.1f} {units[index]}"
+        return f"{number:.2f} {units[index]}"
+
+    @staticmethod
+    def _parse_eta_text(value: str) -> float | None:
+        text = str(value).strip()
+        if not text or "Unknown" in text or text in {"NA", "N/A", "--"}:
+            return None
+        try:
+            parts = [int(part) for part in text.split(":")]
+        except ValueError:
+            return None
+        if len(parts) == 3:
+            return float(parts[0] * 3600 + parts[1] * 60 + parts[2])
+        if len(parts) == 2:
+            return float(parts[0] * 60 + parts[1])
+        if len(parts) == 1:
+            return float(parts[0])
+        return None
+
+    @staticmethod
+    def _short_text(value: str, max_chars: int = 64) -> str:
+        text = str(value)
+        if len(text) <= max_chars:
+            return text
+        keep = max(8, (max_chars - 1) // 2)
+        return f"{text[:keep]}…{text[-keep:]}"
 
 
 if __name__ == "__main__":
