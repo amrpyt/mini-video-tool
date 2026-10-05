@@ -8,8 +8,10 @@
 
 ## أسرع تشغيل على ويندوز
 
-1. نزّل `MiniVideoTool.exe` من [آخر إصدار](../../releases/latest).
-2. إمّا تحط `yt-dlp.exe` و`ffmpeg.exe` و`ffprobe.exe` داخل مجلد `bin` بجوار البرنامج، أو تثبتهم مرة واحدة:
+1. نزّل `MiniVideoTool-portable.zip` من [آخر إصدار](../../releases/latest) وفك الضغط.
+2. الحزمة المحمولة فيها `MiniVideoTool.exe` ومعاه مجلد `bin` جاهز (`yt-dlp` + `ffmpeg` + `ffprobe`).
+
+ولو بتشغّل السورس بدل الحزمة، تقدر تثبت الأدوات مرة واحدة:
 
 ```powershell
 winget install --id yt-dlp.yt-dlp --exact
