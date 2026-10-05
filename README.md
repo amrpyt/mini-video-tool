@@ -2,18 +2,23 @@
 
 أداة ويندوز خفيفة لثلاث حاجات:
 
-1. **تحميل جزء فقط من يوتيوب** باستخدام \`yt-dlp --download-sections\` بدل تنزيل الفيديو كاملًا.
+1. **تحميل جزء فقط من يوتيوب** باستخدام `yt-dlp --download-sections` بدل تنزيل الفيديو كاملًا.
 2. **قص الصمت** من فيديو محلي.
 3. **إضافات بسيطة للفيديو**: صور وPNG شفاف وشريط أسود وكابشن اختياري.
 
-## الاستخدام
+## أسرع تشغيل على ويندوز
 
-- افتح \`MiniVideoTool.exe\`.
-- لازم يكون مجلد \`bin\` بجواره ويحتوي:
-  - \`yt-dlp.exe\`
-  - \`ffmpeg.exe\`
-  - \`ffprobe.exe\`
-- جودات يوتيوب: Best / 1080p / 720p / 480p / 360p.
+1. نزّل `MiniVideoTool.exe` من [آخر إصدار](../../releases/latest).
+2. إمّا تحط `yt-dlp.exe` و`ffmpeg.exe` و`ffprobe.exe` داخل مجلد `bin` بجوار البرنامج، أو تثبتهم مرة واحدة:
+
+```powershell
+winget install --id yt-dlp.yt-dlp --exact
+winget install --id Gyan.FFmpeg --exact
+```
+
+3. افتح `MiniVideoTool.exe`.
+
+جودات يوتيوب: Best / 1080p / 720p / 480p / 360p.
 
 ## ملاحظات مهمة
 
@@ -21,22 +26,20 @@
 - التحميل الجزئي لا يجبر الناتج على MP4.
 - بداية ونهاية الجزء قد تختلف قليلًا حسب الـkeyframes لأننا لا نعيد ترميز الجزء أثناء التنزيل؛ هذا أسرع ويوفر النت ويحافظ على الجودة.
 - كابشن يوتيوب العربي اختياري. عند الحرق يوضع أسفل المنتصف داخل مساحة آمنة مع ظل خفيف.
-- البرنامج يبحث محليًا عن \`Ping AR LT Regular\`. ملف الخط نفسه **غير موجود في الريبو**.
+- البرنامج يبحث محليًا عن `Ping AR LT Regular`. ملف الخط نفسه **غير موجود في الريبو**.
 
 ## تشغيل السورس
 
-يتطلب Python 3.13 وPillow، مع ملفات \`bin\` المذكورة فوق:
+يتطلب Python 3.13 وPillow. بعد تثبيت أدوات الفيديو بالطريقة فوق:
 
-\`\`\`powershell
+```powershell
 pip install -r requirements.txt
 python app.py
-\`\`\`
+```
 
 ## بناء EXE
 
-\`\`\`powershell
+```powershell
 pip install pyinstaller
 pyinstaller --noconfirm --clean --onefile --windowed --name MiniVideoTool app.py
-\`\`\`
-
-بعد البناء ضع \`MiniVideoTool.exe\` بجوار مجلد \`bin\`.
+```
