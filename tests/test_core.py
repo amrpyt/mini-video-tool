@@ -1,14 +1,19 @@
 import tempfile
 import unittest
+from concurrent.futures import CancelledError
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core import (
+    _copy_file_cancellable,
     _ffmpeg_telemetry_event,
+    _probe,
+    _run_ffmpeg_stream,
     aligned_stream_window,
     build_download_command,
     default_silence_destination,
     normalize_partial_download,
+    download_section,
     parse_download_progress,
     parse_download_telemetry,
     parse_silence_intervals,
@@ -29,6 +34,112 @@ class TimeParsingTests(unittest.TestCase):
 
 
 class DownloadCommandTests(unittest.TestCase):
+    def test_probe_exposes_process_for_cancellation(self):
+        process = Mock()
+        process.communicate.return_value = ('{"streams":[],"format":{}}', "")
+        process.returncode = 0
+        seen = []
+        with patch("core.subprocess.Popen", return_value=process):
+            info = _probe(
+                "ffprobe.exe",
+                Path("clip.mp4"),
+                process_callback=seen.append,
+            )
+        self.assertEqual(info["streams"], [])
+        self.assertEqual(seen, [process, None])
+
+    def test_normalization_exposes_remux_process_for_cancellation(self):
+        info = {
+            "streams": [
+                {"codec_type": "video", "start_time": "2.0"},
+                {"codec_type": "audio", "start_time": "0.0"},
+            ],
+            "format": {"start_time": "0.0"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "clip.webm"
+            source.write_bytes(b"original")
+            (root / "ffmpeg.exe").write_bytes(b"x")
+            (root / "ffprobe.exe").write_bytes(b"x")
+            process = Mock()
+            process.communicate.return_value = ("", "")
+            process.returncode = 0
+            seen = []
+
+            def fake_popen(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"normalized")
+                return process
+
+            with patch("core._probe", return_value=info), patch(
+                "core.subprocess.Popen", side_effect=fake_popen
+            ):
+                result = normalize_partial_download(
+                    ffmpeg_dir=root,
+                    source=source,
+                    process_callback=seen.append,
+                )
+            self.assertEqual(result.read_bytes(), b"normalized")
+            self.assertEqual(seen, [process, None])
+
+    def test_cancelled_download_removes_only_its_new_partial_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            existing = output / "keep-me.txt"
+            existing.write_text("keep", encoding="utf-8")
+            partial = output / "video [abc] [00-00-10-00-00-20] [720p].mp4.part"
+            process = Mock()
+            process.stdout = iter([])
+            process.poll.return_value = None
+
+            def fake_popen(*_args, **_kwargs):
+                partial.write_bytes(b"partial")
+                return process
+
+            with patch("core.subprocess.Popen", side_effect=fake_popen):
+                with self.assertRaises(CancelledError):
+                    download_section(
+                        yt_dlp="yt-dlp.exe",
+                        ffmpeg_dir="bin",
+                        url="https://youtu.be/abc",
+                        start=10.0,
+                        end=20.0,
+                        quality="720p",
+                        output_dir=output,
+                        cancel_requested=lambda: True,
+                    )
+            self.assertTrue(existing.exists())
+            self.assertFalse(partial.exists())
+
+    def test_cancel_during_normalization_preserves_completed_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            final_file = output / "video [abc] [00-00-10-00-00-20] [720p].mp4"
+            process = Mock()
+            process.poll.return_value = 0
+            process.wait.return_value = 0
+
+            def stdout_lines():
+                final_file.write_bytes(b"complete-video")
+                yield f"FINAL_FILE:{final_file}"
+
+            process.stdout = stdout_lines()
+            with patch("core.subprocess.Popen", return_value=process), patch(
+                "core.normalize_partial_download", side_effect=CancelledError
+            ):
+                with self.assertRaises(CancelledError):
+                    download_section(
+                        yt_dlp="yt-dlp.exe",
+                        ffmpeg_dir="bin",
+                        url="https://youtu.be/abc",
+                        start=10.0,
+                        end=20.0,
+                        quality="720p",
+                        output_dir=output,
+                    )
+            self.assertTrue(final_file.exists())
+            self.assertEqual(final_file.read_bytes(), b"complete-video")
+
     def test_builds_partial_download_with_requested_quality(self):
         command = build_download_command(
             yt_dlp="yt-dlp.exe",
@@ -103,14 +214,17 @@ class DownloadCommandTests(unittest.TestCase):
             (root / "ffmpeg.exe").write_bytes(b"x")
             (root / "ffprobe.exe").write_bytes(b"x")
 
-            def fake_run(command, **_kwargs):
+            def fake_popen(command, **_kwargs):
                 self.assertIn("copy", command)
                 self.assertNotIn("libx264", command)
                 self.assertAlmostEqual(float(command[command.index("-ss") + 1]), 8.279, places=3)
                 Path(command[-1]).write_bytes(b"normalized")
-                return Mock(returncode=0, stderr="")
+                process = Mock()
+                process.communicate.return_value = ("", "")
+                process.returncode = 0
+                return process
 
-            with patch("core._probe", return_value=info), patch("core.subprocess.run", side_effect=fake_run):
+            with patch("core._probe", return_value=info), patch("core.subprocess.Popen", side_effect=fake_popen):
                 result = normalize_partial_download(ffmpeg_dir=root, source=source)
 
             self.assertEqual(result, source.resolve())
@@ -118,6 +232,42 @@ class DownloadCommandTests(unittest.TestCase):
 
 
 class SilenceTests(unittest.TestCase):
+    def test_large_plain_copy_can_be_cancelled_between_chunks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            destination = root / "destination.bin"
+            source.write_bytes(b"a" * (2 * 1024 * 1024))
+            checks = {"count": 0}
+
+            def cancelled():
+                checks["count"] += 1
+                return checks["count"] >= 3
+
+            with self.assertRaises(CancelledError):
+                _copy_file_cancellable(
+                    source,
+                    destination,
+                    cancel_requested=cancelled,
+                    chunk_size=512 * 1024,
+                )
+            self.assertLess(destination.stat().st_size, source.stat().st_size)
+
+    def test_streaming_ffmpeg_exposes_active_process_for_cancellation(self):
+        process = Mock()
+        process.stdout = iter([])
+        process.wait.return_value = 0
+        seen = []
+        with patch("core.subprocess.Popen", return_value=process):
+            code, _text = _run_ffmpeg_stream(
+                ["ffmpeg.exe"],
+                duration=1.0,
+                stage="silence_analyze",
+                process_callback=seen.append,
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [process, None])
+
     def test_ffmpeg_telemetry_has_real_percent_eta_and_size(self):
         event = _ffmpeg_telemetry_event(
             {

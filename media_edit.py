@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -192,6 +193,8 @@ def download_arabic_captions(
     url: str,
     output_dir: str | Path,
     log_callback: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path | None:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -215,15 +218,24 @@ def download_arabic_captions(
         bufsize=1,
         creationflags=_no_window_flag(),
     )
+    if process_callback:
+        process_callback(process)
     lines: list[str] = []
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        if line:
-            lines.append(line)
-            if log_callback:
-                log_callback(line)
-    return_code = process.wait()
+    try:
+        _raise_if_cancelled(cancel_requested, process)
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            _raise_if_cancelled(cancel_requested, process)
+            line = raw_line.rstrip()
+            if line:
+                lines.append(line)
+                if log_callback:
+                    log_callback(line)
+        return_code = process.wait()
+        _raise_if_cancelled(cancel_requested, process)
+    finally:
+        if process_callback:
+            process_callback(None)
     if return_code != 0:
         raise RuntimeError(_last_lines("\n".join(lines) or "فشل تحميل الكابشن."))
     created: list[Path] = []
@@ -391,9 +403,15 @@ def captions_for_section(
     )
 
 
-def probe_media(ffprobe: str | Path, source: str | Path) -> dict:
+def probe_media(
+    ffprobe: str | Path,
+    source: str | Path,
+    *,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
+) -> dict:
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [
                 str(ffprobe),
                 "-v",
@@ -404,19 +422,29 @@ def probe_media(ffprobe: str | Path, source: str | Path) -> dict:
                 "json",
                 str(source),
             ],
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
             creationflags=_no_window_flag(),
         )
+        if process_callback:
+            process_callback(process)
+        try:
+            _raise_if_cancelled(cancel_requested, process)
+            stdout, stderr = process.communicate(timeout=30)
+            _raise_if_cancelled(cancel_requested, process)
+        finally:
+            if process_callback:
+                process_callback(None)
     except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
         raise RuntimeError("قراءة معلومات الفيديو أخذت وقتًا أطول من المتوقع.") from exc
-    if result.returncode != 0:
-        raise RuntimeError(_last_lines(result.stderr or "فشل قراءة الفيديو."))
-    return json.loads(result.stdout)
+    if process.returncode != 0:
+        raise RuntimeError(_last_lines(stderr or "فشل قراءة الفيديو."))
+    return json.loads(stdout)
 
 
 def video_geometry(info: dict) -> tuple[int, int, float]:
@@ -501,10 +529,12 @@ def extract_preview_frame(
     source: str | Path,
     timestamp: float,
     destination: str | Path,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     destination = Path(destination).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
+    process = subprocess.Popen(
         [
             str(ffmpeg),
             "-y",
@@ -521,15 +551,28 @@ def extract_preview_frame(
             "image2",
             str(destination),
         ],
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
         creationflags=_no_window_flag(),
     )
-    if result.returncode != 0 or not destination.is_file():
-        raise RuntimeError(_last_lines(result.stderr or "فشل استخراج لقطة المعاينة."))
+    if process_callback:
+        process_callback(process)
+    try:
+        _raise_if_cancelled(cancel_requested, process)
+        _stdout, stderr = process.communicate(timeout=30)
+        _raise_if_cancelled(cancel_requested, process)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
+        raise RuntimeError("استخراج لقطة المعاينة أخذ وقتًا أطول من المتوقع.") from exc
+    finally:
+        if process_callback:
+            process_callback(None)
+    if process.returncode != 0 or not destination.is_file():
+        raise RuntimeError(_last_lines(stderr or "فشل استخراج لقطة المعاينة."))
     return destination
 
 
@@ -563,7 +606,12 @@ def _should_use_qsv(*, video_width: int, video_height: int) -> bool:
     return max(1, int(video_width)) * max(1, int(video_height)) >= 1280 * 720
 
 
-def qsv_available(ffmpeg: str | Path) -> bool:
+def qsv_available(
+    ffmpeg: str | Path,
+    *,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
+) -> bool:
     key = str(Path(ffmpeg).resolve())
     if key in _QSV_AVAILABLE:
         return _QSV_AVAILABLE[key]
@@ -585,18 +633,32 @@ def qsv_available(ffmpeg: str | Path) -> bool:
         "NUL" if os.name == "nt" else "/dev/null",
     ]
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             command,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=10,
             creationflags=_no_window_flag(),
         )
-        available = result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+        if process_callback:
+            process_callback(process)
+        try:
+            _raise_if_cancelled(cancel_requested, process)
+            process.communicate(timeout=10)
+            _raise_if_cancelled(cancel_requested, process)
+            available = process.returncode == 0
+        finally:
+            if process_callback:
+                process_callback(None)
+    except CancelledError:
+        raise
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        available = False
+    except OSError:
         available = False
     _QSV_AVAILABLE[key] = available
     return available
@@ -724,9 +786,17 @@ def render_video(
     progress_callback: Callable[[float], None] | None = None,
     telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     source = Path(source).resolve()
-    info = probe_media(ffprobe, source)
+    info = probe_media(
+        ffprobe,
+        source,
+        cancel_requested=cancel_requested,
+        process_callback=process_callback,
+    )
+    _raise_if_cancelled(cancel_requested)
     width, height, duration = video_geometry(info)
     has_audio = any(stream.get("codec_type") == "audio" for stream in info.get("streams", []))
     audio_trim_start, audio_delay_start = sync_audio_timing(info)
@@ -739,7 +809,11 @@ def render_video(
             prefer_hardware
             and destination.suffix.lower() != ".webm"
             and _should_use_qsv(video_width=width, video_height=height)
-            and qsv_available(ffmpeg)
+            and qsv_available(
+                ffmpeg,
+                cancel_requested=cancel_requested,
+                process_callback=process_callback,
+            )
         )
         else "software"
     )
@@ -787,6 +861,8 @@ def render_video(
                     progress_callback=progress_callback,
                     telemetry_callback=telemetry_callback,
                     log_callback=log_callback,
+                    cancel_requested=cancel_requested,
+                    process_callback=process_callback,
                 )
 
             return_code, lines = execute(encoder)
@@ -815,6 +891,7 @@ def render_video(
                 or temp_destination.stat().st_size <= 0
             ):
                 raise RuntimeError(_last_lines("\n".join(lines) or "فشل إخراج الفيديو."))
+        _raise_if_cancelled(cancel_requested)
         temp_destination.replace(destination)
     finally:
         temp_destination.unlink(missing_ok=True)
@@ -931,6 +1008,8 @@ def _run_render_process(
     progress_callback: Callable[[float], None] | None,
     telemetry_callback: Callable[[dict], None] | None,
     log_callback: Callable[[str], None] | None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> tuple[int, list[str]]:
     progress_state: dict[str, str] = {}
     progress_keys = {
@@ -955,30 +1034,54 @@ def _run_render_process(
         bufsize=1,
         creationflags=_no_window_flag(),
     )
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        if not line:
-            continue
-        lines.append(line)
-        key, separator, value = line.partition("=")
-        if separator and key in progress_keys:
-            progress_state[key] = value.strip()
-            if key == "progress":
-                telemetry = _ffmpeg_telemetry_event(
-                    progress_state,
-                    duration=duration,
-                    stage="render",
-                )
-                telemetry["encoder"] = encoder_label
-                if telemetry_callback:
-                    telemetry_callback(telemetry)
-                if progress_callback:
-                    progress_callback(telemetry["percent"])
-            continue
-        if log_callback:
-            log_callback(line)
-    return process.wait(), lines
+    if process_callback:
+        process_callback(process)
+    try:
+        _raise_if_cancelled(cancel_requested, process)
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            _raise_if_cancelled(cancel_requested, process)
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            lines.append(line)
+            key, separator, value = line.partition("=")
+            if separator and key in progress_keys:
+                progress_state[key] = value.strip()
+                if key == "progress":
+                    telemetry = _ffmpeg_telemetry_event(
+                        progress_state,
+                        duration=duration,
+                        stage="render",
+                    )
+                    telemetry["encoder"] = encoder_label
+                    if telemetry_callback:
+                        telemetry_callback(telemetry)
+                    if progress_callback:
+                        progress_callback(telemetry["percent"])
+                continue
+            if log_callback:
+                log_callback(line)
+        return_code = process.wait()
+        _raise_if_cancelled(cancel_requested, process)
+        return return_code, lines
+    finally:
+        if process_callback:
+            process_callback(None)
+
+
+def _raise_if_cancelled(
+    cancel_requested: Callable[[], bool] | None,
+    process: subprocess.Popen | None = None,
+) -> None:
+    if not cancel_requested or not cancel_requested():
+        return
+    if process is not None and process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    raise CancelledError()
 
 
 def _caption_force_style(

@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from media_edit import (
     _ffmpeg_telemetry_event,
+    _run_render_process,
     _should_use_qsv,
     CaptionStyle,
     Overlay,
@@ -17,6 +18,8 @@ from media_edit import (
     fast_render_destination,
     parse_json3_cues,
     parse_srt_cues,
+    probe_media,
+    qsv_available,
     resize_overlay,
     section_caption_window,
     sync_audio_timing,
@@ -101,6 +104,68 @@ class CaptionTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_qsv_probe_exposes_active_process_for_cancellation(self):
+        process = Mock()
+        process.communicate.return_value = ("", "")
+        process.returncode = 0
+        seen = []
+        with patch("media_edit.subprocess.Popen", return_value=process), patch.dict(
+            "media_edit._QSV_AVAILABLE", {}, clear=True
+        ):
+            self.assertTrue(qsv_available("ffmpeg.exe", process_callback=seen.append))
+        self.assertEqual(seen, [process, None])
+
+    def test_probe_media_exposes_active_process_for_cancellation(self):
+        process = Mock()
+        process.communicate.return_value = ('{"streams":[],"format":{}}', "")
+        process.returncode = 0
+        seen = []
+        with patch("media_edit.subprocess.Popen", return_value=process):
+            info = probe_media("ffprobe.exe", "clip.mp4", process_callback=seen.append)
+        self.assertEqual(info["streams"], [])
+        self.assertEqual(seen, [process, None])
+
+    def test_preview_exposes_active_process_for_cancellation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "preview.png"
+            process = Mock()
+            process.communicate.return_value = ("", "")
+            process.returncode = 0
+            seen = []
+
+            def fake_popen(command, **_kwargs):
+                destination.write_bytes(b"png")
+                return process
+
+            with patch("media_edit.subprocess.Popen", side_effect=fake_popen):
+                result = extract_preview_frame(
+                    ffmpeg="ffmpeg.exe",
+                    source="partial.webm",
+                    timestamp=1.0,
+                    destination=destination,
+                    process_callback=seen.append,
+                )
+        self.assertEqual(result.name, "preview.png")
+        self.assertEqual(seen, [process, None])
+
+    def test_render_exposes_active_process_for_cancellation(self):
+        process = Mock()
+        process.stdout = iter([])
+        process.wait.return_value = 0
+        seen = []
+        with patch("media_edit.subprocess.Popen", return_value=process):
+            code, _lines = _run_render_process(
+                ["ffmpeg.exe"],
+                duration=1.0,
+                encoder_label="CPU",
+                progress_callback=None,
+                telemetry_callback=None,
+                log_callback=None,
+                process_callback=seen.append,
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [process, None])
+
     def test_render_telemetry_parses_ffmpeg_block(self):
         event = _ffmpeg_telemetry_event(
             {
@@ -123,12 +188,15 @@ class RenderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             destination = Path(tmp) / "preview.png"
 
-            def fake_run(command, **_kwargs):
+            def fake_popen(command, **_kwargs):
                 self.assertLess(command.index("-i"), command.index("-ss"))
                 destination.write_bytes(b"png")
-                return Mock(returncode=0, stderr="")
+                process = Mock()
+                process.communicate.return_value = ("", "")
+                process.returncode = 0
+                return process
 
-            with patch("media_edit.subprocess.run", side_effect=fake_run):
+            with patch("media_edit.subprocess.Popen", side_effect=fake_popen):
                 result = extract_preview_frame(
                     ffmpeg="ffmpeg.exe",
                     source="partial.webm",

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import CancelledError
 from pathlib import Path
 
 
@@ -176,9 +177,17 @@ def download_section(
     progress_callback: Callable[[float, str, str], None] | None = None,
     telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    section_tag = (
+        f"{format_timecode(start).replace(':', '-')}-"
+        f"{format_timecode(end).replace(':', '-')}"
+    )
+    quality_tag = "best" if quality == "أفضل جودة متاحة" else quality
+    existing_paths = {path.resolve() for path in output.iterdir() if path.is_file()}
     command = build_download_command(
         yt_dlp=yt_dlp,
         ffmpeg_dir=ffmpeg_dir,
@@ -198,6 +207,8 @@ def download_section(
         bufsize=1,
         creationflags=_no_window_flag(),
     )
+    if process_callback:
+        process_callback(process)
     final_file: Path | None = None
     lines: list[str] = []
     ffmpeg_progress: dict[str, str] = {}
@@ -214,62 +225,82 @@ def download_section(
     }
     last_stream_bytes: float | None = None
     last_stream_wall: float | None = None
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        if not line:
-            continue
-        lines.append(line)
-        if line.startswith("FINAL_FILE:"):
-            final_file = Path(line.removeprefix("FINAL_FILE:").strip()).resolve()
-            continue
-        telemetry = parse_download_telemetry(line)
-        if telemetry:
-            if telemetry_callback:
-                telemetry_callback(telemetry)
-            if progress_callback:
-                progress_callback(
-                    telemetry["percent"], telemetry["speed_text"], telemetry["eta_text"]
-                )
-            continue
-        key, separator, value = line.partition("=")
-        if separator and key in ffmpeg_progress_keys:
-            ffmpeg_progress[key] = value.strip()
-            if key == "progress" and telemetry_callback:
-                event = _ffmpeg_telemetry_event(
-                    ffmpeg_progress,
-                    duration=max(0.001, float(end) - float(start)),
-                    stage="download_stream",
-                )
-                total_size = event.get("total_size")
-                now = time.monotonic()
-                data_rate = None
-                if isinstance(total_size, (int, float)):
-                    event["downloaded_bytes"] = float(total_size)
-                    if (
-                        last_stream_bytes is not None
-                        and last_stream_wall is not None
-                        and now > last_stream_wall
-                        and float(total_size) >= last_stream_bytes
-                    ):
-                        data_rate = (float(total_size) - last_stream_bytes) / (now - last_stream_wall)
-                    last_stream_bytes = float(total_size)
-                    last_stream_wall = now
-                event["speed"] = data_rate
-                event["speed_text"] = (
-                    f"{event.get('speed_factor'):.2f}x"
-                    if isinstance(event.get("speed_factor"), (int, float))
-                    else ""
-                )
-                telemetry_callback(event)
-            continue
-        if log_callback and (
-            line.startswith(("[youtube]", "[info]", "[download]", "ERROR", "WARNING"))
-            or "error" in line.lower()
-            or "warning" in line.lower()
-        ):
-            log_callback(line)
-    return_code = process.wait()
+    try:
+        _raise_if_cancelled(cancel_requested, process)
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            _raise_if_cancelled(cancel_requested, process)
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            lines.append(line)
+            if line.startswith("FINAL_FILE:"):
+                final_file = Path(line.removeprefix("FINAL_FILE:").strip()).resolve()
+                continue
+            telemetry = parse_download_telemetry(line)
+            if telemetry:
+                if telemetry_callback:
+                    telemetry_callback(telemetry)
+                if progress_callback:
+                    progress_callback(
+                        telemetry["percent"], telemetry["speed_text"], telemetry["eta_text"]
+                    )
+                continue
+            key, separator, value = line.partition("=")
+            if separator and key in ffmpeg_progress_keys:
+                ffmpeg_progress[key] = value.strip()
+                if key == "progress" and telemetry_callback:
+                    event = _ffmpeg_telemetry_event(
+                        ffmpeg_progress,
+                        duration=max(0.001, float(end) - float(start)),
+                        stage="download_stream",
+                    )
+                    total_size = event.get("total_size")
+                    now = time.monotonic()
+                    data_rate = None
+                    if isinstance(total_size, (int, float)):
+                        event["downloaded_bytes"] = float(total_size)
+                        if (
+                            last_stream_bytes is not None
+                            and last_stream_wall is not None
+                            and now > last_stream_wall
+                            and float(total_size) >= last_stream_bytes
+                        ):
+                            data_rate = (float(total_size) - last_stream_bytes) / (now - last_stream_wall)
+                        last_stream_bytes = float(total_size)
+                        last_stream_wall = now
+                    event["speed"] = data_rate
+                    event["speed_text"] = (
+                        f"{event.get('speed_factor'):.2f}x"
+                        if isinstance(event.get("speed_factor"), (int, float))
+                        else ""
+                    )
+                    telemetry_callback(event)
+                continue
+            if log_callback and (
+                line.startswith(("[youtube]", "[info]", "[download]", "ERROR", "WARNING"))
+                or "error" in line.lower()
+                or "warning" in line.lower()
+            ):
+                log_callback(line)
+        return_code = process.wait()
+        _raise_if_cancelled(cancel_requested, process)
+    except CancelledError:
+        for path in output.iterdir():
+            if (
+                path.is_file()
+                and path.resolve() not in existing_paths
+                and f"[{section_tag}]" in path.name
+                and f"[{quality_tag}]" in path.name
+            ):
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+        raise
+    finally:
+        if process_callback:
+            process_callback(None)
     if return_code != 0:
         raise RuntimeError(_last_lines("\n".join(lines) or "فشل التحميل."))
     if final_file and final_file.is_file():
@@ -278,17 +309,14 @@ def download_section(
             source=final_file,
             log_callback=log_callback,
             telemetry_callback=telemetry_callback,
+            cancel_requested=cancel_requested,
+            process_callback=process_callback,
         )
         if telemetry_callback:
             telemetry_callback(
                 {"stage": "download_ready", "percent": 100.0, "output_size": result.stat().st_size}
             )
         return result
-    section_tag = (
-        f"{format_timecode(start).replace(':', '-')}-"
-        f"{format_timecode(end).replace(':', '-')}"
-    )
-    quality_tag = "best" if quality == "أفضل جودة متاحة" else quality
     matches = sorted(
         (
             path
@@ -306,6 +334,8 @@ def download_section(
             source=matches[0].resolve(),
             log_callback=log_callback,
             telemetry_callback=telemetry_callback,
+            cancel_requested=cancel_requested,
+            process_callback=process_callback,
         )
         if telemetry_callback:
             telemetry_callback(
@@ -321,6 +351,8 @@ def normalize_partial_download(
     source: str | Path,
     log_callback: Callable[[str], None] | None = None,
     telemetry_callback: Callable[[dict], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     """Remove audio-only preroll caused by keyframe-aligned section downloads.
 
@@ -334,7 +366,13 @@ def normalize_partial_download(
         return source
 
     try:
-        info = _probe(ffprobe, source)
+        info = _probe(
+            ffprobe,
+            source,
+            cancel_requested=cancel_requested,
+            process_callback=process_callback,
+        )
+        _raise_if_cancelled(cancel_requested)
         streams = info.get("streams") or []
         video = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
         audio = next((stream for stream in streams if stream.get("codec_type") == "audio"), None)
@@ -368,7 +406,7 @@ def normalize_partial_download(
                 )
             if log_callback:
                 log_callback("تسوية بداية الصوت والصورة بدون إعادة ترميز...")
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [
                     str(ffmpeg),
                     "-y",
@@ -387,17 +425,27 @@ def normalize_partial_download(
                     "make_zero",
                     str(temp_destination),
                 ],
-                check=False,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 creationflags=_no_window_flag(),
             )
-            if result.returncode != 0 or not temp_destination.is_file() or temp_destination.stat().st_size <= 0:
+            if process_callback:
+                process_callback(process)
+            try:
+                _raise_if_cancelled(cancel_requested, process)
+                _stdout, stderr = process.communicate()
+                _raise_if_cancelled(cancel_requested, process)
+            finally:
+                if process_callback:
+                    process_callback(None)
+            if process.returncode != 0 or not temp_destination.is_file() or temp_destination.stat().st_size <= 0:
                 if log_callback:
                     log_callback("تعذر تسوية بداية المسارات؛ تم الاحتفاظ بالملف الأصلي.")
                 return source
+            _raise_if_cancelled(cancel_requested)
             temp_destination.replace(source)
             if telemetry_callback:
                 telemetry_callback(
@@ -410,6 +458,8 @@ def normalize_partial_download(
                 )
         finally:
             temp_destination.unlink(missing_ok=True)
+    except CancelledError:
+        raise
     except Exception as exc:
         if log_callback:
             log_callback(f"تم الاحتفاظ بالملف الأصلي بعد تعذر تسوية البداية: {exc}")
@@ -509,11 +559,19 @@ def cut_silence(
     status_callback: Callable[[str], None] | None = None,
     telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     source = Path(source).resolve()
     if not source.is_file():
         raise ValueError("اختار ملف فيديو صحيح.")
-    info = _probe(ffprobe, source)
+    info = _probe(
+        ffprobe,
+        source,
+        cancel_requested=cancel_requested,
+        process_callback=process_callback,
+    )
+    _raise_if_cancelled(cancel_requested)
     streams = info.get("streams") or []
     if not any(stream.get("codec_type") == "video" for stream in streams):
         raise ValueError("الملف لا يحتوي على فيديو.")
@@ -569,7 +627,10 @@ def cut_silence(
         stage="silence_analyze",
         telemetry_callback=telemetry_callback,
         log_callback=log_callback,
+        cancel_requested=cancel_requested,
+        process_callback=process_callback,
     )
+    _raise_if_cancelled(cancel_requested)
     if detection_return_code != 0:
         raise RuntimeError(_last_lines(detection_text or "فشل تحليل الصمت."))
 
@@ -602,7 +663,13 @@ def cut_silence(
         destination.parent.mkdir(parents=True, exist_ok=True)
         temp_destination = _temporary_sibling(destination)
         try:
-            shutil.copy2(source, temp_destination)
+            _raise_if_cancelled(cancel_requested)
+            _copy_file_cancellable(
+                source,
+                temp_destination,
+                cancel_requested=cancel_requested,
+            )
+            _raise_if_cancelled(cancel_requested)
             temp_destination.replace(destination)
         except Exception:
             temp_destination.unlink(missing_ok=True)
@@ -687,7 +754,10 @@ def cut_silence(
             stage="silence_render",
             telemetry_callback=telemetry_callback,
             log_callback=log_callback,
+            cancel_requested=cancel_requested,
+            process_callback=process_callback,
         )
+        _raise_if_cancelled(cancel_requested)
         if (
             render_return_code != 0
             or not temp_destination.is_file()
@@ -695,6 +765,7 @@ def cut_silence(
         ):
             temp_destination.unlink(missing_ok=True)
             raise RuntimeError(_last_lines(render_text or "فشل قص الصمت."))
+        _raise_if_cancelled(cancel_requested)
         temp_destination.replace(destination)
     finally:
         Path(script_handle.name).unlink(missing_ok=True)
@@ -718,6 +789,8 @@ def _run_ffmpeg_stream(
     stage: str,
     telemetry_callback: Callable[[dict], None] | None = None,
     log_callback: Callable[[str], None] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> tuple[int, str]:
     process = subprocess.Popen(
         command,
@@ -729,6 +802,8 @@ def _run_ffmpeg_stream(
         bufsize=1,
         creationflags=_no_window_flag(),
     )
+    if process_callback:
+        process_callback(process)
     state: dict[str, str] = {}
     lines: list[str] = []
     progress_keys = {
@@ -742,21 +817,43 @@ def _run_ffmpeg_stream(
         "speed",
         "progress",
     }
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        if not line:
-            continue
-        lines.append(line)
-        key, separator, value = line.partition("=")
-        if separator and key in progress_keys:
-            state[key] = value.strip()
-            if key == "progress" and telemetry_callback:
-                telemetry_callback(_ffmpeg_telemetry_event(state, duration=duration, stage=stage))
-            continue
-        if log_callback and ("silence_" in line or "error" in line.lower() or "warning" in line.lower()):
-            log_callback(line)
-    return process.wait(), "\n".join(lines)
+    try:
+        _raise_if_cancelled(cancel_requested, process)
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            _raise_if_cancelled(cancel_requested, process)
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            lines.append(line)
+            key, separator, value = line.partition("=")
+            if separator and key in progress_keys:
+                state[key] = value.strip()
+                if key == "progress" and telemetry_callback:
+                    telemetry_callback(_ffmpeg_telemetry_event(state, duration=duration, stage=stage))
+                continue
+            if log_callback and ("silence_" in line or "error" in line.lower() or "warning" in line.lower()):
+                log_callback(line)
+        return_code = process.wait()
+        _raise_if_cancelled(cancel_requested, process)
+        return return_code, "\n".join(lines)
+    finally:
+        if process_callback:
+            process_callback(None)
+
+
+def _raise_if_cancelled(
+    cancel_requested: Callable[[], bool] | None,
+    process: subprocess.Popen | None = None,
+) -> None:
+    if not cancel_requested or not cancel_requested():
+        return
+    if process is not None and process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    raise CancelledError()
 
 
 def _ffmpeg_telemetry_event(state: dict[str, str], *, duration: float, stage: str) -> dict:
@@ -788,9 +885,15 @@ def _ffmpeg_telemetry_event(state: dict[str, str], *, duration: float, stage: st
     }
 
 
-def _probe(ffprobe: str | Path, source: Path) -> dict:
+def _probe(
+    ffprobe: str | Path,
+    source: Path,
+    *,
+    cancel_requested: Callable[[], bool] | None = None,
+    process_callback: Callable[[subprocess.Popen | None], None] | None = None,
+) -> dict:
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [
                 str(ffprobe),
                 "-v",
@@ -801,19 +904,69 @@ def _probe(ffprobe: str | Path, source: Path) -> dict:
                 "json",
                 str(source),
             ],
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=30,
             creationflags=_no_window_flag(),
         )
+        if process_callback:
+            process_callback(process)
+        try:
+            _raise_if_cancelled(cancel_requested, process)
+            stdout, stderr = process.communicate(timeout=30)
+            _raise_if_cancelled(cancel_requested, process)
+        finally:
+            if process_callback:
+                process_callback(None)
     except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
         raise RuntimeError("قراءة معلومات الفيديو أخذت وقتًا أطول من المتوقع.") from exc
-    if result.returncode != 0:
-        raise RuntimeError(_last_lines(result.stderr or "فشل قراءة الفيديو."))
-    return json.loads(result.stdout)
+    if process.returncode != 0:
+        raise RuntimeError(_last_lines(stderr or "فشل قراءة الفيديو."))
+    return json.loads(stdout)
+
+
+def _copy_file_cancellable(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    cancel_requested: Callable[[], bool] | None = None,
+    chunk_size: int = 8 * 1024 * 1024,
+) -> None:
+    source = Path(source)
+    destination = Path(destination)
+    with source.open("rb") as src, destination.open("wb") as dst:
+        while True:
+            _raise_if_cancelled(cancel_requested)
+            chunk = src.read(chunk_size)
+            if not chunk:
+                break
+            dst.write(chunk)
+    _raise_if_cancelled(cancel_requested)
+    shutil.copystat(source, destination)
+
+
+def _cleanup_cancelled_download_files(
+    output: Path,
+    *,
+    existing_paths: set[Path],
+    section_tag: str,
+    quality_tag: str,
+) -> None:
+    for path in output.iterdir():
+        if (
+            path.is_file()
+            and path.resolve() not in existing_paths
+            and f"[{section_tag}]" in path.name
+            and f"[{quality_tag}]" in path.name
+        ):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def _last_lines(text: str, count: int = 8) -> str:

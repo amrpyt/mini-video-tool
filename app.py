@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
 import tkinter as tk
 import queue
 import time
+from concurrent.futures import CancelledError
 from dataclasses import replace
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
@@ -32,6 +34,22 @@ from media_edit import (
 
 APP_TITLE = "Mini Video Tool"
 HANDLE_SIZE = 8
+
+
+def terminate_process_tree(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode != 0 and process.poll() is None:
+            process.kill()
+    else:
+        process.terminate()
 
 
 def app_dir() -> Path:
@@ -84,6 +102,9 @@ class MiniVideoTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.busy = False
+        self.cancel_event = threading.Event()
+        self._process_lock = threading.Lock()
+        self._active_process: subprocess.Popen | None = None
         self.ui_queue: queue.Queue[tuple[object, tuple]] = queue.Queue()
         self.action_buttons: list[ttk.Button] = []
         self.busy_controls: list[tuple[tk.Widget, str]] = []
@@ -408,6 +429,22 @@ class MiniVideoTool(tk.Tk):
             bg="#0b1220",
             font=("Segoe UI Semibold", 17),
         ).pack(side="left")
+        self.cancel_button = tk.Button(
+            header,
+            text="إيقاف العملية",
+            command=self._cancel_job,
+            state="disabled",
+            bg="#7f1d1d",
+            fg="#fee2e2",
+            activebackground="#991b1b",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=9,
+            pady=3,
+            font=("Segoe UI Semibold", 8),
+        )
+        self.cancel_button.pack(side="left", padx=(8, 0))
 
         style = ttk.Style(self)
         style.configure(
@@ -642,9 +679,16 @@ class MiniVideoTool(tk.Tk):
                 output_dir=output,
                 telemetry_callback=self._thread_download_telemetry,
                 log_callback=self._thread_log,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
             )
             self._thread_status("فحص الملف النهائي...", indeterminate=True)
-            info = probe_media(ffprobe, video)
+            info = probe_media(
+                ffprobe,
+                video,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
+            )
             caption_file = None
             if want_captions:
                 self._thread_status("تحميل كابشن يوتيوب العربي...", indeterminate=True)
@@ -655,6 +699,8 @@ class MiniVideoTool(tk.Tk):
                         url=url,
                         output_dir=Path(raw_temp),
                         log_callback=self._thread_log,
+                        cancel_requested=self.cancel_event.is_set,
+                        process_callback=self._set_active_process,
                     )
                     if srt:
                         width, height, _duration = video_geometry(info)
@@ -725,6 +771,8 @@ class MiniVideoTool(tk.Tk):
                 status_callback=lambda text: self._thread_status(text, indeterminate=True),
                 telemetry_callback=self._thread_ffmpeg_telemetry,
                 log_callback=self._thread_log,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
             )
 
         self._start_job("تحليل الصمت...", work, self._silence_finished, indeterminate=True)
@@ -780,7 +828,12 @@ class MiniVideoTool(tk.Tk):
         )
 
         def work():
-            info = probe_media(ffprobe, source)
+            info = probe_media(
+                ffprobe,
+                source,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
+            )
             width, height, duration = video_geometry(info)
             return source, generation, width, height, duration, extract_now
 
@@ -840,6 +893,8 @@ class MiniVideoTool(tk.Tk):
                 source=source,
                 timestamp=timestamp,
                 destination=destination,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
             )
             return frame_path, source_identity, timestamp, generation
 
@@ -1229,6 +1284,8 @@ class MiniVideoTool(tk.Tk):
                 prefer_hardware=True,
                 telemetry_callback=self._thread_ffmpeg_telemetry,
                 log_callback=self._thread_log,
+                cancel_requested=self.cancel_event.is_set,
+                process_callback=self._set_active_process,
             )
 
         self._start_job("إخراج الفيديو...", work, self._render_finished)
@@ -1714,6 +1771,8 @@ class MiniVideoTool(tk.Tk):
                 detail=label,
                 engine_label="FFmpeg" if "لقطة" in label or "فيديو" in label else "—",
             )
+        self.cancel_event.clear()
+        self._set_active_process(None)
         self._set_busy(True)
         self.activity_detail_var.set(label)
         self._set_activity(self.operation_title or label, indeterminate=indeterminate)
@@ -1721,11 +1780,19 @@ class MiniVideoTool(tk.Tk):
         def runner() -> None:
             try:
                 result = target()
+            except CancelledError:
+                self._post_ui(self._job_cancelled)
             except Exception as exc:
-                error = str(exc)
-                self._post_ui(self._job_failed, error)
+                if self.cancel_event.is_set():
+                    self._post_ui(self._job_cancelled)
+                else:
+                    error = str(exc)
+                    self._post_ui(self._job_failed, error)
             else:
-                self._post_ui(self._job_succeeded, result, on_success)
+                if self.cancel_event.is_set():
+                    self._post_ui(self._job_cancelled)
+                else:
+                    self._post_ui(self._job_succeeded, result, on_success)
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -1734,6 +1801,7 @@ class MiniVideoTool(tk.Tk):
         if self.operation_started_at is not None:
             elapsed = max(0.0, time.monotonic() - self.operation_started_at)
         self.operation_active = False
+        self._set_active_process(None)
         self._set_busy(False)
         self._set_activity("تم ✓", percent=100)
         self.activity_detail_var.set(self.operation_title or "اكتملت العملية")
@@ -1748,11 +1816,38 @@ class MiniVideoTool(tk.Tk):
 
     def _job_failed(self, error: str) -> None:
         self.operation_active = False
+        self._set_active_process(None)
         self._set_busy(False)
         self._set_activity("حصل خطأ", percent=0)
         self.activity_detail_var.set(self.operation_title or "فشلت العملية")
         self._log(error)
         messagebox.showerror(APP_TITLE, error)
+
+    def _job_cancelled(self) -> None:
+        self.operation_active = False
+        self._set_active_process(None)
+        self._set_busy(False)
+        self._set_activity("تم الإيقاف", percent=0)
+        self.activity_detail_var.set("تم إيقاف العملية بواسطة المستخدم")
+        self.operation_eta_seconds = None
+        self._log("تم إيقاف العملية بواسطة المستخدم.")
+
+    def _set_active_process(self, process: subprocess.Popen | None) -> None:
+        with self._process_lock:
+            self._active_process = process
+        if process is not None and self.cancel_event.is_set():
+            terminate_process_tree(process)
+
+    def _cancel_job(self) -> None:
+        if not self.busy:
+            return
+        self.cancel_event.set()
+        self.cancel_button.configure(state="disabled")
+        self.activity_detail_var.set("جاري إيقاف العملية...")
+        with self._process_lock:
+            process = self._active_process
+        if process is not None:
+            terminate_process_tree(process)
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -1764,6 +1859,8 @@ class MiniVideoTool(tk.Tk):
                 widget.configure(state=state if busy else normal_state)
             except tk.TclError:
                 pass
+        if hasattr(self, "cancel_button"):
+            self.cancel_button.configure(state="normal" if busy else "disabled")
 
     def _set_activity(self, text: str, *, percent: float | None = None, indeterminate: bool = False) -> None:
         self.activity_var.set(text)
