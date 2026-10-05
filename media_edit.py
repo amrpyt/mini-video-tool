@@ -450,28 +450,28 @@ def sync_audio_trim(info: dict) -> float:
     return sync_audio_timing(info)[0]
 
 
-def section_caption_window(info: dict, *, requested_start: float) -> tuple[float, float]:
-    video = next(
-        (stream for stream in info.get("streams", []) if stream.get("codec_type") == "video"),
-        None,
-    )
+def section_caption_window(
+    info: dict,
+    *,
+    requested_start: float,
+    requested_end: float,
+) -> tuple[float, float]:
     format_info = info.get("format") or {}
-    try:
-        video_start = float((video or {}).get("start_time") or 0)
-    except (TypeError, ValueError):
-        video_start = 0.0
-    try:
-        format_start = float(format_info.get("start_time") or 0)
-    except (TypeError, ValueError):
-        format_start = 0.0
     try:
         duration = float(format_info.get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0.0
-    actual_start = float(requested_start) + max(0.0, video_start)
-    actual_end = float(requested_start) + max(video_start, format_start + duration)
-    if actual_end <= actual_start:
-        actual_end = actual_start + max(0.001, duration)
+    requested_start = float(requested_start)
+    requested_end = float(requested_end)
+    if requested_end <= requested_start:
+        raise ValueError("وقت نهاية الجزء لازم يكون بعد البداية.")
+    if duration <= 0:
+        duration = requested_end - requested_start
+    # Section downloads can contain keyframe preroll. After stream-copy
+    # normalization the local timestamps are rebased, while FFmpeg still ends
+    # at the requested source time. Anchor the local duration to that end time.
+    actual_end = requested_end
+    actual_start = max(0.0, actual_end - duration)
     return actual_start, actual_end
 
 

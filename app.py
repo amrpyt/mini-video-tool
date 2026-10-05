@@ -435,6 +435,7 @@ class MiniVideoTool(tk.Tk):
                         caption_start, caption_end = section_caption_window(
                             info,
                             requested_start=start,
+                            requested_end=end,
                         )
                         caption_file = video.with_name(f"{video.stem}.captions.ass")
                         captions_for_section(

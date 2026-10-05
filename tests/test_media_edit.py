@@ -159,7 +159,7 @@ class RenderTests(unittest.TestCase):
         self.assertGreater(resized.w, overlay.w)
         self.assertAlmostEqual(resized.h, overlay.h, places=6)
 
-    def test_partial_download_timeline_aligns_caption_and_audio_to_video_start(self):
+    def test_partial_download_timeline_aligns_audio_and_caption_window_after_normalization(self):
         info = {
             "streams": [
                 {"codec_type": "video", "start_time": "2.305"},
@@ -185,9 +185,25 @@ class RenderTests(unittest.TestCase):
             "[0:a]asetpts=PTS-STARTPTS,atrim=start=2.312000,asetpts=PTS-STARTPTS",
             graph,
         )
-        start, end = section_caption_window(info, requested_start=3766.0)
-        self.assertAlmostEqual(start, 3768.305, places=3)
-        self.assertAlmostEqual(end, 3781.973, places=3)
+        normalized = {"format": {"duration": "8.708"}}
+        start, end = section_caption_window(
+            normalized,
+            requested_start=90.0,
+            requested_end=93.0,
+        )
+        self.assertAlmostEqual(start, 84.292, places=3)
+        self.assertAlmostEqual(end, 93.0, places=3)
+
+    def test_caption_window_is_exact_when_download_has_no_preroll(self):
+        info = {"format": {"duration": "3.000"}}
+        self.assertEqual(
+            section_caption_window(
+                info,
+                requested_start=90.0,
+                requested_end=93.0,
+            ),
+            (90.0, 93.0),
+        )
 
     def test_audio_sync_normalizes_equal_positive_start_and_preserves_late_audio(self):
         equal = {
