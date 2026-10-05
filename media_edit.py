@@ -553,6 +553,16 @@ def fast_render_destination(source: Path) -> Path:
 _QSV_AVAILABLE: dict[str, bool] = {}
 
 
+def _should_use_qsv(*, video_width: int, video_height: int) -> bool:
+    """Use QSV where this machine's measurements show a clear speed win.
+
+    Tiny renders pay proportionally more setup/copy overhead; on the target
+    Core Ultra 5 125H, x264 was faster at 360p while QSV won strongly at 720p
+    and above. Pixel count also handles portrait video better than height alone.
+    """
+    return max(1, int(video_width)) * max(1, int(video_height)) >= 1280 * 720
+
+
 def qsv_available(ffmpeg: str | Path) -> bool:
     key = str(Path(ffmpeg).resolve())
     if key in _QSV_AVAILABLE:
@@ -723,7 +733,16 @@ def render_video(
     destination = Path(destination or default_render_destination(source)).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = _temporary_sibling(destination)
-    encoder = "qsv" if prefer_hardware and destination.suffix.lower() != ".webm" and qsv_available(ffmpeg) else "software"
+    encoder = (
+        "qsv"
+        if (
+            prefer_hardware
+            and destination.suffix.lower() != ".webm"
+            and _should_use_qsv(video_width=width, video_height=height)
+            and qsv_available(ffmpeg)
+        )
+        else "software"
+    )
     if telemetry_callback:
         telemetry_callback(
             {

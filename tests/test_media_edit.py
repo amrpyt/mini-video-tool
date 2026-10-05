@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from media_edit import (
     _ffmpeg_telemetry_event,
+    _should_use_qsv,
     CaptionStyle,
     Overlay,
     build_caption_download_command,
@@ -315,6 +316,12 @@ class RenderTests(unittest.TestCase):
         self.assertIn("h264_qsv", command)
         self.assertIn("-global_quality", command)
         self.assertIn("nv12", command)
+
+    def test_qsv_is_reserved_for_roughly_720p_or_larger_frames(self):
+        self.assertFalse(_should_use_qsv(video_width=640, video_height=360))
+        self.assertFalse(_should_use_qsv(video_width=854, video_height=480))
+        self.assertTrue(_should_use_qsv(video_width=1280, video_height=720))
+        self.assertTrue(_should_use_qsv(video_width=720, video_height=1280))
 
     def test_preserves_supported_container_in_default_destination(self):
         self.assertEqual(default_render_destination(Path("talk.mkv")).suffix, ".mkv")
