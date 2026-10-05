@@ -1,0 +1,9 @@
+build/
+dist/
+__pycache__/
+*.spec
+*.log
+tests/__pycache__/
+_qa/
+bin/*.exe
+MiniVideoTool.exe
