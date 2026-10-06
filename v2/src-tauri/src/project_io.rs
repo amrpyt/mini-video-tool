@@ -5,11 +5,15 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::{domain::project::Project, error::AppError};
+use crate::{
+    domain::project::{PROJECT_SCHEMA_VERSION, Project},
+    error::AppError,
+};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn save_project_atomic(path: &Path, project: &Project) -> Result<(), AppError> {
+    validate_schema_version(project)?;
     let (temp_path, temp_file) = create_sibling_temp(path)?;
     let result = write_project(temp_file, &temp_path, project)
         .and_then(|_| atomic_replace_file(&temp_path, path));
@@ -25,9 +29,22 @@ pub fn load_project(path: &Path) -> Result<Project, AppError> {
     let file = File::open(path)
         .map_err(|error| AppError::SourceUnavailable(format!("{}: {error}", path.display())))?;
 
-    serde_json::from_reader(BufReader::new(file)).map_err(|error| {
+    let project = serde_json::from_reader(BufReader::new(file)).map_err(|error| {
         AppError::InvalidInput(format!("invalid project file {}: {error}", path.display()))
-    })
+    })?;
+    validate_schema_version(&project)?;
+    Ok(project)
+}
+
+fn validate_schema_version(project: &Project) -> Result<(), AppError> {
+    if project.schema_version != PROJECT_SCHEMA_VERSION {
+        return Err(AppError::InvalidInput(format!(
+            "unsupported project schema version {}; expected {}",
+            project.schema_version, PROJECT_SCHEMA_VERSION
+        )));
+    }
+
+    Ok(())
 }
 
 fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> {

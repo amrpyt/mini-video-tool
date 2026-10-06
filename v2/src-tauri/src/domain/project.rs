@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::time::{FrameRate, MediaTime, TimeRange};
 
+pub const PROJECT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DownloadQuality {

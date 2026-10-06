@@ -9,7 +9,7 @@ use mini_video_tool_v2::{
     domain::{
         project::{
             CaptionStyle, CaptionTrack, DownloadQuality, ExportSettings, NormalizedRect, Overlay,
-            Project, SilenceState, SourceMetadata, SourceState,
+            PROJECT_SCHEMA_VERSION, Project, SilenceState, SourceMetadata, SourceState,
         },
         time::{FrameRate, MediaTime, TimeRange, frame_step},
     },
@@ -30,7 +30,7 @@ fn test_dir(label: &str) -> PathBuf {
 
 fn sample_project(source_path: PathBuf) -> Project {
     Project {
-        schema_version: 1,
+        schema_version: PROJECT_SCHEMA_VERSION,
         source: SourceState {
             path: Some(source_path),
             metadata: Some(SourceMetadata {
@@ -83,13 +83,9 @@ fn sample_project(source_path: PathBuf) -> Project {
 
 #[test]
 fn time_range_requires_positive_duration() {
-    assert_eq!(
-        TimeRange::new(10_000_000, 30_000_000).expect("valid range"),
-        TimeRange {
-            start: MediaTime(10_000_000),
-            end: MediaTime(30_000_000),
-        }
-    );
+    let range = TimeRange::new(10_000_000, 30_000_000).expect("valid range");
+    assert_eq!(range.start(), MediaTime(10_000_000));
+    assert_eq!(range.end(), MediaTime(30_000_000));
     assert!(TimeRange::new(10_000_000, 10_000_000).is_err());
     assert!(TimeRange::new(30_000_000, 10_000_000).is_err());
 }
@@ -109,12 +105,35 @@ fn frame_step_uses_integer_rational_arithmetic() {
         frame_step(MediaTime(5_000_000), 30_000, rate).expect("large exact frame step"),
         MediaTime(1_006_000_000)
     );
-
     let mut repeated = MediaTime(0);
     for _ in 0..1_000 {
         repeated = frame_step(repeated, 30, rate).expect("repeat exact rational frame step");
     }
     assert_eq!(repeated, MediaTime(1_001_000_000));
+}
+
+#[test]
+fn repeated_single_frame_steps_stay_on_grid_and_reverse_cleanly() {
+    let rate = FrameRate {
+        numerator: 30_000,
+        denominator: 1_001,
+    };
+
+    let mut time = MediaTime(0);
+    for _ in 0..30 {
+        time = frame_step(time, 1, rate).expect("step forward one frame");
+    }
+    assert_eq!(time, MediaTime(1_001_000));
+
+    for _ in 0..30 {
+        time = frame_step(time, -1, rate).expect("step backward one frame");
+    }
+    assert_eq!(time, MediaTime(0));
+
+    assert_eq!(
+        frame_step(MediaTime(123_456), 0, rate).expect("zero frames"),
+        MediaTime(123_456)
+    );
 }
 
 #[test]
@@ -127,6 +146,49 @@ fn project_json_round_trips_schema_version_one() {
 
     let decoded: Project = serde_json::from_value(json).expect("deserialize project");
     assert_eq!(decoded, project);
+}
+
+#[test]
+fn malformed_time_range_json_is_rejected() {
+    assert!(serde_json::from_str::<TimeRange>(r#"{"start":100,"end":100}"#).is_err());
+    assert!(serde_json::from_str::<TimeRange>(r#"{"start":200,"end":100}"#).is_err());
+
+    let range = serde_json::from_str::<TimeRange>(r#"{"start":100,"end":200}"#)
+        .expect("valid time range json");
+    assert_eq!(range, TimeRange::new(100, 200).expect("valid range"));
+    assert_eq!(range.start(), MediaTime(100));
+    assert_eq!(range.end(), MediaTime(200));
+}
+
+#[test]
+fn load_rejects_unsupported_project_schema_version() {
+    let dir = test_dir("unsupported-load-schema");
+    let project_path = dir.join("project.mvt.json");
+    let project = sample_project(PathBuf::from(r"C:\media\source.mp4"));
+    let mut json = serde_json::to_value(project).expect("serialize project");
+    json["schemaVersion"] = serde_json::json!(2);
+    fs::write(
+        &project_path,
+        serde_json::to_vec_pretty(&json).expect("serialize unsupported project json"),
+    )
+    .expect("write unsupported project");
+
+    assert!(load_project(&project_path).is_err());
+
+    fs::remove_dir_all(dir).expect("remove test directory");
+}
+
+#[test]
+fn save_rejects_unsupported_project_schema_version() {
+    let dir = test_dir("unsupported-save-schema");
+    let project_path = dir.join("project.mvt.json");
+    let mut project = sample_project(PathBuf::from(r"C:\media\source.mp4"));
+    project.schema_version = 2;
+
+    assert!(save_project_atomic(&project_path, &project).is_err());
+    assert!(!project_path.exists());
+
+    fs::remove_dir_all(dir).expect("remove test directory");
 }
 
 #[test]
