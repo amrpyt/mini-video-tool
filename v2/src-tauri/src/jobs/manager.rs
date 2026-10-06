@@ -366,7 +366,12 @@ impl Drop for JobManager {
             Err(poisoned) => poisoned.into_inner(),
         };
         let mut pids = state.auxiliary_pids.drain().collect::<Vec<_>>();
-        pids.extend(state.jobs.values_mut().filter_map(|record| record.pid.take()));
+        pids.extend(
+            state
+                .jobs
+                .values_mut()
+                .filter_map(|record| record.pid.take()),
+        );
         for pid in pids {
             let _ = (self.terminate)(pid);
         }

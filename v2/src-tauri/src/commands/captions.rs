@@ -2,12 +2,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, State};
 
-use crate::{
-    domain::project::CaptionTrack,
-    error::AppError,
-    jobs::JobManager,
-    media::captions,
-};
+use crate::{domain::project::CaptionTrack, error::AppError, jobs::JobManager, media::captions};
 
 #[tauri::command]
 pub async fn import_captions(path: PathBuf) -> Result<CaptionTrack, AppError> {

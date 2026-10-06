@@ -3,7 +3,7 @@ pub mod encoder;
 pub mod export;
 pub mod ffmpeg;
 pub mod ffprobe;
-pub mod process;
 pub mod preview;
+pub mod process;
 pub mod silence;
 pub mod ytdlp;

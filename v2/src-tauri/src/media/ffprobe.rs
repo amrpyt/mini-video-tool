@@ -1,7 +1,5 @@
 use std::{ffi::OsString, path::Path};
 
-use serde::Deserialize;
-use tauri::AppHandle;
 use crate::{
     domain::{
         project::SourceMetadata,
@@ -10,6 +8,8 @@ use crate::{
     error::AppError,
     jobs::JobManager,
 };
+use serde::Deserialize;
+use tauri::AppHandle;
 
 use super::process::run_auxiliary_sidecar;
 
