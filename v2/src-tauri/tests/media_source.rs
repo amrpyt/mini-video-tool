@@ -118,6 +118,47 @@ fn download_args_are_strictly_partial_and_reject_full_source_selection() {
 }
 
 #[test]
+fn download_output_identity_is_distinct_by_range_and_quality_and_deterministic() {
+    let base = DownloadRangeRequest {
+        url: "https://youtu.be/abc123".into(),
+        selection: TimeRange::new(10 * SECOND, 20 * SECOND).expect("first partial selection"),
+        source_duration: MediaTime(60 * SECOND),
+        quality: DownloadQuality::P720,
+        output_dir: PathBuf::from(r"C:\media output"),
+    };
+    let different_range = DownloadRangeRequest {
+        selection: TimeRange::new(20 * SECOND, 30 * SECOND).expect("second partial selection"),
+        ..base.clone()
+    };
+    let different_quality = DownloadRangeRequest {
+        quality: DownloadQuality::P1080,
+        ..base.clone()
+    };
+
+    let output_template = |request: &DownloadRangeRequest| {
+        let args = build_download_args(request).expect("build partial download args");
+        let output_index = args
+            .iter()
+            .position(|arg| arg == "-o")
+            .expect("output template flag");
+        args[output_index + 1].clone()
+    };
+
+    let first = output_template(&base);
+    let repeated = output_template(&base);
+    let second_range = output_template(&different_range);
+    let second_quality = output_template(&different_quality);
+
+    assert_eq!(first, repeated);
+    assert_ne!(first, second_range);
+    assert_ne!(first, second_quality);
+    let first = first.to_string_lossy();
+    assert!(first.contains("%(title).120B"));
+    assert!(first.contains("[%(id)s]"));
+    assert!(first.ends_with(".%(ext)s"));
+}
+
+#[test]
 fn explicit_quality_prefers_hls_h264_then_hls_then_bounded_v1_selector() {
     assert_eq!(format_selector(DownloadQuality::Best), "bv*+ba/b");
 

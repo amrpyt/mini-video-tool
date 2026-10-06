@@ -126,10 +126,19 @@ pub fn build_download_args(request: &DownloadRangeRequest) -> Result<Vec<OsStrin
         format_timestamp(request.selection.start()),
         format_timestamp(request.selection.end())
     );
-    let output_template = request
-        .output_dir
-        .join("%(title).120B [%(id)s].%(ext)s")
-        .into_os_string();
+    let quality_tag = match request.quality {
+        DownloadQuality::Best => "best",
+        DownloadQuality::P1080 => "p1080",
+        DownloadQuality::P720 => "p720",
+        DownloadQuality::P480 => "p480",
+        DownloadQuality::P360 => "p360",
+    };
+    let output_name = format!(
+        "%(title).120B [%(id)s] [s{}-e{}-{quality_tag}].%(ext)s",
+        request.selection.start().0,
+        request.selection.end().0
+    );
+    let output_template = request.output_dir.join(output_name).into_os_string();
 
     Ok(vec![
         "--no-playlist".into(),
