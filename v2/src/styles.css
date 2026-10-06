@@ -84,6 +84,26 @@ textarea:focus-visible {
   background: var(--bg);
 }
 
+.app-header {
+  grid-row: 1;
+}
+
+.runtime-stack {
+  grid-row: 2;
+}
+
+.stepper {
+  grid-row: 3;
+}
+
+.workspace {
+  grid-row: 4;
+}
+
+.timeline-panel {
+  grid-row: 5;
+}
+
 .runtime-stack:empty {
   display: none;
 }
@@ -1099,7 +1119,7 @@ textarea:focus-visible {
 
 @media (max-height: 780px) {
   .app-shell {
-    grid-template-rows: auto auto minmax(290px, 1fr) minmax(260px, 38vh);
+    grid-template-rows: auto auto auto minmax(290px, 1fr) minmax(260px, 38vh);
   }
 
   .preview-stage {
