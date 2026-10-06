@@ -71,9 +71,16 @@ export function resizeGeometry(
   aspectRatio?: number,
 ): NormalizedGeometry {
   if (aspectRatio && Number.isFinite(aspectRatio) && aspectRatio > 0) {
-    const widthScale = (geometry.width + delta.x) / Math.max(MIN_SIZE, geometry.width);
-    const heightScale = (geometry.height + delta.y) / Math.max(MIN_SIZE, geometry.height);
-    const scale = Math.max(MIN_SIZE / Math.max(geometry.width, geometry.height), widthScale, heightScale);
+    const denominator = geometry.width * geometry.width + geometry.height * geometry.height;
+    const projectedScale =
+      denominator > 0
+        ? 1 + (delta.x * geometry.width + delta.y * geometry.height) / denominator
+        : 1;
+    const minimumScale = Math.max(
+      MIN_SIZE / Math.max(MIN_SIZE, geometry.width),
+      MIN_SIZE / Math.max(MIN_SIZE, geometry.height),
+    );
+    const scale = Math.max(minimumScale, projectedScale);
     return clampGeometry(
       {
         ...geometry,

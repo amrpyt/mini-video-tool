@@ -63,6 +63,21 @@ fn malformed_caption_timestamps_return_a_typed_error() {
 }
 
 #[test]
+fn srt_rejects_malformed_blocks_instead_of_partially_importing_them() {
+    let source = "1\n00:00:01,000 --> 00:00:02,000\nGood\n\nBROKEN BLOCK\ntext only\n";
+    assert!(parse_srt(source).is_err());
+}
+
+#[test]
+fn srt_accepts_whitespace_only_block_separators() {
+    let source = "1\n00:00:01,000 --> 00:00:02,000\nOne\n   \n2\n00:00:03,000 --> 00:00:04,000\nTwo\n";
+    let cues = parse_srt(source).expect("parse whitespace-separated SRT cues");
+    assert_eq!(cues.len(), 2);
+    assert_eq!(cues[0].text, "One");
+    assert_eq!(cues[1].text, "Two");
+}
+
+#[test]
 fn youtube_caption_args_are_subtitles_only_and_prefer_arabic() {
     let args = build_youtube_caption_args(
         "https://youtu.be/abc123",

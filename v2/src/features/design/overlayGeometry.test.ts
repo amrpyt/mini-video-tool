@@ -47,4 +47,17 @@ describe("overlayGeometry", () => {
     expect(resized.x + resized.width).toBeLessThanOrEqual(1);
     expect(resized.y + resized.height).toBeLessThanOrEqual(1);
   });
+
+  it("shrinks an aspect-locked corner when only one pointer axis moves inward", () => {
+    const original = { x: 0.1, y: 0.1, width: 0.4, height: 0.2 };
+    const horizontal = resizeGeometry(original, { x: -0.1, y: 0 }, 2);
+    const vertical = resizeGeometry(original, { x: 0, y: -0.05 }, 2);
+
+    expect(horizontal.width).toBeLessThan(original.width);
+    expect(horizontal.height).toBeLessThan(original.height);
+    expect(horizontal.width / horizontal.height).toBeCloseTo(2, 6);
+    expect(vertical.width).toBeLessThan(original.width);
+    expect(vertical.height).toBeLessThan(original.height);
+    expect(vertical.width / vertical.height).toBeCloseTo(2, 6);
+  });
 });

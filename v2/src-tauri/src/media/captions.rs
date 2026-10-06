@@ -18,17 +18,42 @@ use crate::{
 
 pub fn parse_srt(text: &str) -> Result<Vec<CaptionCue>, AppError> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut blocks = Vec::<Vec<&str>>::new();
+    let mut current = Vec::new();
+    for line in normalized.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(line.trim_end());
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    if blocks.is_empty() {
+        return Err(AppError::InvalidInput("caption file contains no SRT cues".into()));
+    }
+
     let mut cues = Vec::new();
-    for block in normalized.split("\n\n") {
-        let lines = block
-            .lines()
-            .map(str::trim_end)
-            .filter(|line| !line.trim().is_empty())
-            .collect::<Vec<_>>();
-        let Some(time_index) = lines.iter().position(|line| line.contains("-->")) else {
-            continue;
+    for (block_index, lines) in blocks.iter().enumerate() {
+        let first = lines
+            .first()
+            .map(|line| line.trim_start_matches('\u{feff}').trim())
+            .unwrap_or("");
+        let time_index = if first.parse::<u64>().is_ok() { 1 } else { 0 };
+        let Some(time_line) = lines.get(time_index) else {
+            return Err(AppError::InvalidInput(format!(
+                "malformed SRT cue {}: missing timing line",
+                block_index + 1
+            )));
         };
-        let time_line = lines[time_index];
+        if !time_line.contains("-->") {
+            return Err(AppError::InvalidInput(format!(
+                "malformed SRT timing line: {time_line}"
+            )));
+        }
         let Some((start_text, end_text)) = time_line.split_once("-->") else {
             return Err(AppError::InvalidInput(format!(
                 "malformed SRT timing line: {time_line}"
@@ -43,7 +68,10 @@ pub fn parse_srt(text: &str) -> Result<Vec<CaptionCue>, AppError> {
         }
         let body = lines[time_index + 1..].join("\n");
         if body.trim().is_empty() {
-            continue;
+            return Err(AppError::InvalidInput(format!(
+                "malformed SRT cue {}: caption text is empty",
+                block_index + 1
+            )));
         }
         cues.push(CaptionCue {
             start: MediaTime(start),

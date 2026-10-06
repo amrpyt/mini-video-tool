@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorSource } from "../app/editorReducer";
+import { createDefaultCaptionStyle } from "../app/editorReducer";
 import { Preview } from "./Preview";
 
 afterEach(cleanup);
@@ -96,5 +97,32 @@ describe("Preview", () => {
       />,
     );
     expect(requestStillFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps caption left/right physical and measures vertical margin from frame height", () => {
+    const style = {
+      ...createDefaultCaptionStyle(),
+      horizontalPosition: "left" as const,
+      verticalPosition: "bottom" as const,
+      marginPercent: 7,
+    };
+    render(
+      <Preview
+        source={localSource}
+        playheadUs={5_000_000}
+        captionTrack={{
+          enabled: true,
+          cues: [{ start: 0, end: 10_000_000, text: "نص caption" }],
+          style,
+        }}
+        requestStillFrame={vi.fn()}
+        toAssetUrl={() => "asset://clip.mp4"}
+      />,
+    );
+
+    const layer = screen.getByTestId("preview-caption-layer");
+    expect(layer).toHaveClass("caption-left", "caption-bottom");
+    expect(layer).toHaveStyle({ direction: "ltr", paddingBottom: "7cqh" });
+    expect(screen.getByText("نص caption").closest('[dir="auto"]')).not.toBeNull();
   });
 });

@@ -295,13 +295,14 @@ export function Preview({
           className={`preview-caption-layer caption-${captionTrack.style.verticalPosition} caption-${captionTrack.style.horizontalPosition}`}
           data-testid="preview-caption-layer"
           style={{
+            direction: "ltr",
             paddingTop:
               captionTrack.style.verticalPosition === "top"
-                ? `${captionTrack.style.marginPercent}%`
+                ? `${captionTrack.style.marginPercent}cqh`
                 : undefined,
             paddingBottom:
               captionTrack.style.verticalPosition === "bottom"
-                ? `${captionTrack.style.marginPercent}%`
+                ? `${captionTrack.style.marginPercent}cqh`
                 : undefined,
           }}
         >
@@ -324,7 +325,7 @@ export function Preview({
             }}
           >
             {activeCues.map((cue, index) => (
-              <span key={`${cue.start}-${cue.end}-${index}`}>
+              <span key={`${cue.start}-${cue.end}-${index}`} dir="auto">
                 {cue.text.split("\n").map((line, lineIndex) => (
                   <span key={lineIndex}>
                     {lineIndex > 0 ? <br /> : null}
