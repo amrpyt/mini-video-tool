@@ -65,6 +65,7 @@ fn sample_project(source_path: PathBuf) -> Project {
         }],
         captions: CaptionTrack {
             enabled: true,
+            cues: Vec::new(),
             style: CaptionStyle {
                 font_family: Some("Arial".into()),
                 font_size_px: Some(48),

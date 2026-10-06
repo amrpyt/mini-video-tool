@@ -62,7 +62,17 @@ pub struct Overlay {
 #[serde(rename_all = "camelCase")]
 pub struct CaptionTrack {
     pub enabled: bool,
+    #[serde(default)]
+    pub cues: Vec<CaptionCue>,
     pub style: CaptionStyle,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionCue {
+    pub start: MediaTime,
+    pub end: MediaTime,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
