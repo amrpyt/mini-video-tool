@@ -32,6 +32,8 @@ pub struct SourceMetadata {
     pub width: u32,
     pub height: u32,
     pub frame_rate: FrameRate,
+    #[serde(default)]
+    pub has_audio: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

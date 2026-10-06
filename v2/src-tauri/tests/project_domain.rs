@@ -41,6 +41,7 @@ fn sample_project(source_path: PathBuf) -> Project {
                     numerator: 30_000,
                     denominator: 1_001,
                 },
+                has_audio: true,
             }),
             download_quality: DownloadQuality::P1080,
         },

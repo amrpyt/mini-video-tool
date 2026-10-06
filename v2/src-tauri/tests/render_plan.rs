@@ -26,6 +26,7 @@ fn metadata() -> SourceMetadata {
             numerator: 30,
             denominator: 1,
         },
+        has_audio: true,
     }
 }
 
