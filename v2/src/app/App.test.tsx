@@ -1,8 +1,10 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { App } from "./App";
+
+afterEach(cleanup);
 
 describe("App shell", () => {
   it("shows the six editor steps without the Python v1 tabs", () => {
@@ -32,5 +34,28 @@ describe("App shell", () => {
     expect(screen.queryByText("تحميل جزء")).not.toBeInTheDocument();
     expect(screen.queryByText("قص الصمت")).not.toBeInTheDocument();
     expect(screen.queryByText("صور + كابشن")).not.toBeInTheDocument();
+  });
+
+  it("keeps preview and timeline mounted while navigation and skip preserve project data", () => {
+    render(<App />);
+
+    const preview = screen.getByRole("region", { name: "المعاينة" });
+    const timeline = screen.getByRole("region", { name: "الخط الزمني" });
+    const selectionBefore = screen.getByTestId("selection-summary").textContent;
+
+    fireEvent.click(screen.getByRole("button", { name: "التحديد" }));
+    expect(screen.getByRole("region", { name: "المعاينة" })).toBe(preview);
+    expect(screen.getByRole("region", { name: "الخط الزمني" })).toBe(timeline);
+
+    fireEvent.click(screen.getByRole("button", { name: "التصدير" }));
+    expect(screen.getByRole("region", { name: "المعاينة" })).toBe(preview);
+    expect(screen.getByRole("region", { name: "الخط الزمني" })).toBe(timeline);
+
+    fireEvent.click(screen.getByRole("button", { name: "المصدر" }));
+    fireEvent.click(screen.getByRole("button", { name: "تخطي الخطوة" }));
+
+    expect(screen.getByTestId("selection-summary")).toHaveTextContent(selectionBefore ?? "");
+    expect(screen.getByRole("region", { name: "المعاينة" })).toBe(preview);
+    expect(screen.getByRole("region", { name: "الخط الزمني" })).toBe(timeline);
   });
 });
