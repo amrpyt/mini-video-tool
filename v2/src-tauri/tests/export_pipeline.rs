@@ -20,8 +20,10 @@ use mini_video_tool_v2::{
         encoder::{EncoderCapabilities, choose_encoder, is_qsv_initialization_failure},
         export::{
             build_ffmpeg_args, build_filter_graph, parse_ffmpeg_progress, prepare_render_assets,
-            publish_temp_output,
+            publish_temp_output, validate_export_request, validate_rendered_output,
+            ExportProjectRequest,
         },
+        ffmpeg::FfmpegAttempt,
     },
 };
 
@@ -81,6 +83,7 @@ fn project(has_audio: bool, image_path: Option<PathBuf>) -> Project {
             path: Some(PathBuf::from(r"C:\فيديوهات فيها مسافات\مصدر.mp4")),
             metadata: Some(metadata(has_audio)),
             download_quality: DownloadQuality::Best,
+            ..Default::default()
         },
         selection: Some(range(1, 11)),
         silence: SilenceState {
@@ -208,6 +211,19 @@ fn qsv_fallback_only_recognizes_hardware_initialization_failures() {
 }
 
 #[test]
+fn qsv_fallback_classification_uses_full_multiline_ffmpeg_stderr() {
+    let attempt = FfmpegAttempt {
+        exit_code: Some(1),
+        process_error: None,
+        stderr: "[h264_qsv] Error initializing an internal MFX session: unsupported (-3)\nConversion failed!\n".into(),
+        max_out_time_us: 0,
+    };
+
+    assert_eq!(attempt.diagnostic(), "Conversion failed!");
+    assert!(attempt.is_qsv_initialization_failure());
+}
+
+#[test]
 fn no_audio_graph_never_references_audio_input_or_audio_output() {
     let root = temp_dir("no-audio");
     let render_plan = plan(false, None, 0);
@@ -319,6 +335,93 @@ fn publication_preserves_existing_destination_on_cancel_and_replaces_it_on_succe
 }
 
 #[test]
+fn rendered_output_validation_rejects_truncation_and_missing_required_audio() {
+    let render_plan = plan(true, None, 0);
+    let expected = SourceMetadata {
+        duration: render_plan.duration(),
+        width: render_plan.export().width,
+        height: render_plan.export().height,
+        frame_rate: render_plan.export().frame_rate,
+        has_audio: true,
+    };
+    validate_rendered_output(&render_plan, &expected).expect("valid rendered output");
+
+    let mut truncated = expected.clone();
+    truncated.duration = MediaTime(render_plan.duration().0 - 1_000_000);
+    assert!(validate_rendered_output(&render_plan, &truncated).is_err());
+
+    let mut missing_audio = expected.clone();
+    missing_audio.has_audio = false;
+    assert!(validate_rendered_output(&render_plan, &missing_audio).is_err());
+
+    let no_audio_plan = plan(false, None, 0);
+    let no_audio_output = SourceMetadata {
+        duration: no_audio_plan.duration(),
+        width: no_audio_plan.export().width,
+        height: no_audio_plan.export().height,
+        frame_rate: no_audio_plan.export().frame_rate,
+        has_audio: false,
+    };
+    validate_rendered_output(&no_audio_plan, &no_audio_output)
+        .expect("video-only output is valid for video-only input");
+}
+
+#[test]
+fn custom_caption_font_uses_internal_family_not_renamed_file_stem() {
+    let system_font = PathBuf::from(r"C:\Windows\Fonts\arial.ttf");
+    assert!(system_font.is_file(), "Windows Arial font fixture is unavailable");
+    let root = temp_dir("font-family");
+    let renamed_font = root.join("totally-renamed-caption-font.ttf");
+    fs::copy(&system_font, &renamed_font).unwrap();
+
+    let mut project = project(true, None);
+    project.captions.style.font_path = Some(renamed_font);
+    let render_plan = compile_render_plan(
+        &project,
+        ResolvedInput {
+            path: PathBuf::from(r"C:\فيديوهات فيها مسافات\مصدر.mp4"),
+            source_offset: MediaTime(0),
+            metadata: metadata(true),
+        },
+        PathBuf::from(r"C:\نتائج فيها مسافات\الفيديو النهائي.mp4"),
+        EncoderSelection::CpuX264,
+    )
+    .unwrap();
+    let prepared = prepare_render_assets(&render_plan, &root.join("job")).unwrap();
+    let ass = fs::read_to_string(prepared.caption_ass().unwrap()).unwrap();
+    let style = ass
+        .lines()
+        .find(|line| line.starts_with("Style: Default,"))
+        .unwrap();
+    assert!(style.starts_with("Style: Default,Arial,"), "unexpected style: {style}");
+    assert!(!style.contains("totally-renamed-caption-font"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn export_rejects_using_the_source_file_as_the_destination() {
+    let root = temp_dir("protect-source");
+    let source = root.join("Source Clip.mp4");
+    fs::write(&source, b"original source bytes").unwrap();
+    let mut project = project(true, None);
+    project.source.path = Some(source.clone());
+    let request = ExportProjectRequest {
+        project,
+        input: ResolvedInput {
+            path: source.clone(),
+            source_offset: MediaTime(0),
+            metadata: metadata(true),
+        },
+        output: source.clone(),
+        prefer_hardware: true,
+    };
+
+    assert!(validate_export_request(&request).is_err());
+    assert_eq!(fs::read(&source).unwrap(), b"original source bytes");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn real_ffmpeg_one_pass_export_applies_cut_overlay_caption_and_keeps_av_synced() {
     let root = temp_dir("real-one-pass-مسار عربي");
     let ffmpeg = sidecar_binary("ffmpeg");
@@ -393,6 +496,7 @@ fn real_ffmpeg_one_pass_export_applies_cut_overlay_caption_and_keeps_av_synced()
                 has_audio: true,
             }),
             download_quality: DownloadQuality::Best,
+            ..Default::default()
         },
         selection: Some(range(0, 4)),
         silence: SilenceState {

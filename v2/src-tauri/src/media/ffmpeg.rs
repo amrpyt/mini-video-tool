@@ -35,6 +35,17 @@ impl FfmpegAttempt {
                 .unwrap_or_else(|| format!("ffmpeg exited with code {:?}", self.exit_code))
         })
     }
+
+    pub fn is_qsv_initialization_failure(&self) -> bool {
+        let mut diagnostic = self.stderr.clone();
+        if let Some(error) = self.process_error.as_deref() {
+            if !diagnostic.is_empty() {
+                diagnostic.push('\n');
+            }
+            diagnostic.push_str(error);
+        }
+        super::encoder::is_qsv_initialization_failure(&diagnostic)
+    }
 }
 
 pub async fn run_attempt(

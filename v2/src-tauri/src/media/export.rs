@@ -101,6 +101,7 @@ pub fn prepare_render_assets(
 
     if !plan.captions().is_empty() {
         let style = plan.caption_style().cloned().unwrap_or_default();
+        let mut resolved_font_name = None;
         if let Some(font_path) = style.font_path.as_ref() {
             if !font_path.is_file() {
                 return Err(AppError::SourceUnavailable(format!(
@@ -116,11 +117,15 @@ pub fn prepare_render_assets(
             })?;
             fs::copy(font_path, fonts_dir.join(file_name))
                 .map_err(export_io_error("copy caption font", &fonts_dir))?;
+            resolved_font_name = Some(read_font_family(font_path)?);
             prepared.fonts_dir = Some(fonts_dir);
         }
 
         let ass_path = job_dir.join("captions.ass");
-        fs::write(&ass_path, render_ass(plan, &style))
+        fs::write(
+            &ass_path,
+            render_ass(plan, &style, resolved_font_name.as_deref()),
+        )
             .map_err(export_io_error("write caption asset", &ass_path))?;
         prepared.caption_ass = Some(ass_path);
     }
@@ -387,7 +392,7 @@ pub fn start_export(
     manager: &JobManager,
     request: ExportProjectRequest,
 ) -> Result<JobId, AppError> {
-    validate_request(&request)?;
+    validate_export_request(&request)?;
     let job = manager.begin(JobKind::Export)?;
     let worker_app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -475,7 +480,7 @@ async fn run_export_job(
         if !attempt.succeeded()
             && active_plan.encoder() == EncoderSelection::IntelQsv
             && attempt.max_out_time_us <= 0
-            && encoder::is_qsv_initialization_failure(&attempt.diagnostic())
+            && attempt.is_qsv_initialization_failure()
         {
             let _ = fs::remove_file(&temp_output);
             active_plan = compile_render_plan(
@@ -505,14 +510,7 @@ async fn run_export_job(
             .map_err(|error| {
                 AppError::ExportFailed(format!("export validation failed: {error}"))
             })?;
-        if metadata.width != active_plan.export().width
-            || metadata.height != active_plan.export().height
-            || metadata.duration.0 <= 0
-        {
-            return Err(AppError::ExportFailed(
-                "export validation returned unexpected media properties".into(),
-            ));
-        }
+        validate_rendered_output(&active_plan, &metadata)?;
         manager.complete_with(job, || {
             publish_temp_output(&temp_output, &request.output, false)
         })
@@ -526,7 +524,41 @@ async fn run_export_job(
     result
 }
 
-fn validate_request(request: &ExportProjectRequest) -> Result<(), AppError> {
+pub fn validate_rendered_output(
+    plan: &RenderPlan,
+    metadata: &crate::domain::project::SourceMetadata,
+) -> Result<(), AppError> {
+    if metadata.width != plan.export().width || metadata.height != plan.export().height {
+        return Err(AppError::ExportFailed(
+            "export validation returned unexpected dimensions".into(),
+        ));
+    }
+    if plan.input().metadata.has_audio && !metadata.has_audio {
+        return Err(AppError::ExportFailed(
+            "export validation found a missing audio stream".into(),
+        ));
+    }
+    let expected = plan.duration().0;
+    if expected <= 0 || metadata.duration.0 <= 0 {
+        return Err(AppError::ExportFailed(
+            "export validation returned an invalid duration".into(),
+        ));
+    }
+    let frame_tolerance = i64::from(plan.export().frame_rate.denominator)
+        .saturating_mul(2_000_000)
+        .checked_div(i64::from(plan.export().frame_rate.numerator).max(1))
+        .unwrap_or(0);
+    let tolerance = frame_tolerance.max(150_000);
+    if metadata.duration.0.abs_diff(expected) > tolerance as u64 {
+        return Err(AppError::ExportFailed(format!(
+            "export validation duration mismatch: expected {}us, got {}us",
+            expected, metadata.duration.0
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_export_request(request: &ExportProjectRequest) -> Result<(), AppError> {
     if !request.input.path.is_file() {
         return Err(AppError::SourceUnavailable(format!(
             "export source is missing: {}",
@@ -544,10 +576,35 @@ fn validate_request(request: &ExportProjectRequest) -> Result<(), AppError> {
             "export output must be an MP4 file".into(),
         ));
     }
+    if request.output.exists() {
+        let input = fs::canonicalize(&request.input.path).map_err(export_io_error(
+            "resolve export source",
+            &request.input.path,
+        ))?;
+        let output = fs::canonicalize(&request.output)
+            .map_err(export_io_error("resolve export destination", &request.output))?;
+        if same_path(&input, &output) {
+            return Err(AppError::InvalidInput(
+                "export destination must be different from the source file".into(),
+            ));
+        }
+    }
     if let Some(parent) = request.output.parent() {
         fs::create_dir_all(parent).map_err(export_io_error("create export directory", parent))?;
     }
     Ok(())
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 
 fn sibling_temp_output(destination: &Path, job: JobId) -> Result<PathBuf, AppError> {
@@ -566,12 +623,9 @@ fn is_cancelled(manager: &JobManager, job: JobId) -> Result<bool, AppError> {
     ))
 }
 
-fn render_ass(plan: &RenderPlan, style: &CaptionStyle) -> String {
-    let font_name = style
-        .font_path
-        .as_ref()
-        .and_then(|path| path.file_stem())
-        .and_then(|value| value.to_str())
+fn render_ass(plan: &RenderPlan, style: &CaptionStyle, resolved_font_name: Option<&str>) -> String {
+    let font_name = resolved_font_name
+        .or(style.font_family.as_deref())
         .unwrap_or("Arial");
     let font_size = (plan.export().height as f32 * style.size_percent / 100.0).max(1.0);
     let alignment = ass_alignment(style.vertical_position, style.horizontal_position);
@@ -604,6 +658,31 @@ fn render_ass(plan: &RenderPlan, style: &CaptionStyle) -> String {
         ));
     }
     output
+}
+
+fn read_font_family(path: &Path) -> Result<String, AppError> {
+    let data = fs::read(path).map_err(export_io_error("read caption font", path))?;
+    let face = ttf_parser::Face::parse(&data, 0).map_err(|error| {
+        AppError::UnsupportedMedia(format!(
+            "cannot parse caption font {}: {error:?}",
+            path.display()
+        ))
+    })?;
+    let names = face.names();
+    for wanted in [ttf_parser::name_id::TYPOGRAPHIC_FAMILY, ttf_parser::name_id::FAMILY] {
+        if let Some(name) = names
+            .into_iter()
+            .filter(|name| name.name_id == wanted)
+            .find_map(|name| name.to_string())
+            .filter(|name| !name.trim().is_empty())
+        {
+            return Ok(name);
+        }
+    }
+    Err(AppError::UnsupportedMedia(format!(
+        "caption font has no readable family name: {}",
+        path.display()
+    )))
 }
 
 fn ass_alignment(vertical: CaptionVerticalPosition, horizontal: CaptionHorizontalPosition) -> u8 {

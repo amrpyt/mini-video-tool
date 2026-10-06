@@ -20,6 +20,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-persisted-scope = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-shell = "2"
 thiserror = "2"
+ttf-parser = "0.25"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
