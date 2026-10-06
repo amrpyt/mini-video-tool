@@ -7,3 +7,4 @@ tests/__pycache__/
 _qa*
 bin/*.exe
 MiniVideoTool*.exe
+.worktrees/
