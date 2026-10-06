@@ -5,7 +5,7 @@ import { useEffect, useReducer, useState } from "react";
 import { Inspector } from "../components/Inspector";
 import { Preview } from "../components/Preview";
 import { Stepper, STEP_LABELS } from "../components/Stepper";
-import { Timeline } from "../components/timeline/Timeline";
+import { Timeline, type FilmstripFrame } from "../components/timeline/Timeline";
 import { RangeStep } from "../features/range/RangeStep";
 import { formatTimeInput, frameStepUs } from "../features/range/timeInput";
 import { SourceStep } from "../features/source/SourceStep";
@@ -24,7 +24,7 @@ import {
 
 export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
-  const filmstripUrls = useLocalFilmstrip(state.project.source);
+  const filmstripFrames = useLocalFilmstrip(state.project.source);
 
   useEditorShortcuts(state, dispatch);
 
@@ -100,7 +100,7 @@ export function EditorWorkspace() {
           durationUs={durationUs}
           selection={selection}
           playheadUs={state.playheadUs}
-          filmstripUrls={filmstripUrls}
+          filmstripFrames={filmstripFrames}
           onPlayheadChange={(valueUs) => dispatch({ type: "playhead/set", valueUs })}
           onSelectionChange={(nextSelection) =>
             dispatch({ type: "project/setSelection", selection: nextSelection })
@@ -239,15 +239,15 @@ function useEditorShortcuts(state: EditorState, dispatch: (action: EditorAction)
   }, [dispatch, state]);
 }
 
-function useLocalFilmstrip(source: EditorState["project"]["source"]): string[] {
-  const [urls, setUrls] = useState<string[]>([]);
+function useLocalFilmstrip(source: EditorState["project"]["source"]): FilmstripFrame[] {
+  const [frames, setFrames] = useState<FilmstripFrame[]>([]);
   const localPath = source.kind === "local" ? source.path : null;
   const localDuration = source.kind === "local" ? source.metadata.duration : 0;
 
   useEffect(() => {
     let cancelled = false;
     if (!localPath || localDuration <= 0) {
-      setUrls([]);
+      setFrames([]);
       return () => {
         cancelled = true;
       };
@@ -264,9 +264,17 @@ function useLocalFilmstrip(source: EditorState["project"]["source"]): string[] {
           count: 12,
           destinationDir,
         });
-        if (!cancelled) setUrls(paths.map((path) => convertFileSrc(path)));
+        if (!cancelled) {
+          const count = paths.length;
+          setFrames(
+            paths.map((path, index) => ({
+              url: convertFileSrc(path),
+              timeUs: count > 0 ? Math.round((index * localDuration) / count) : 0,
+            })),
+          );
+        }
       } catch {
-        if (!cancelled) setUrls([]);
+        if (!cancelled) setFrames([]);
       }
     }
 
@@ -276,5 +284,5 @@ function useLocalFilmstrip(source: EditorState["project"]["source"]): string[] {
     };
   }, [localDuration, localPath]);
 
-  return urls;
+  return frames;
 }

@@ -15,7 +15,10 @@ describe("Timeline", () => {
         playheadUs={30_000_000}
         onPlayheadChange={() => undefined}
         onSelectionChange={() => undefined}
-        filmstripUrls={["asset://frame-1.jpg", "asset://frame-2.jpg"]}
+        filmstripFrames={[
+          { url: "asset://frame-1.jpg", timeUs: 0 },
+          { url: "asset://frame-2.jpg", timeUs: 50_000_000 },
+        ]}
       />,
     );
 
@@ -25,6 +28,34 @@ describe("Timeline", () => {
     for (const lane of ["Video", "Filmstrip", "Waveform", "Cuts", "Captions", "Overlays"]) {
       expect(screen.getByTestId(`timeline-lane-${lane.toLowerCase()}`)).toBeInTheDocument();
     }
+  });
+
+  it("maps filmstrip frames to source time and keeps them aligned after zoom", () => {
+    render(
+      <Timeline
+        durationUs={100_000_000}
+        selection={{ start: 20_000_000, end: 80_000_000 }}
+        playheadUs={50_000_000}
+        onPlayheadChange={() => undefined}
+        onSelectionChange={() => undefined}
+        filmstripFrames={[
+          { url: "asset://frame-0.jpg", timeUs: 0 },
+          { url: "asset://frame-25.jpg", timeUs: 25_000_000 },
+          { url: "asset://frame-50.jpg", timeUs: 50_000_000 },
+          { url: "asset://frame-75.jpg", timeUs: 75_000_000 },
+        ]}
+      />,
+    );
+
+    const frame25 = screen.getByTestId("filmstrip-frame-25000000");
+    expect(frame25).toHaveStyle({ left: "250px" });
+    expect(screen.getByTestId("filmstrip-frame-0")).toHaveStyle({ left: "0px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "تكبير" }));
+
+    expect(screen.queryByTestId("filmstrip-frame-0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("filmstrip-frame-25000000")).toHaveStyle({ left: "125px" });
+    expect(screen.getByTestId("filmstrip-frame-50000000")).toHaveStyle({ left: "500px" });
   });
 
   it("scrubs and moves handles locally without any media backend dependency", () => {

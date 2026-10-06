@@ -18,7 +18,12 @@ interface TimelineProps {
   playheadUs: number;
   onPlayheadChange: (timeUs: number) => void;
   onSelectionChange: (selection: TimeRange) => void;
-  filmstripUrls?: string[];
+  filmstripFrames?: FilmstripFrame[];
+}
+
+export interface FilmstripFrame {
+  url: string;
+  timeUs: number;
 }
 
 const LANE_IDS = ["Video", "Filmstrip", "Waveform", "Cuts", "Captions", "Overlays"] as const;
@@ -29,7 +34,7 @@ export function Timeline({
   playheadUs,
   onPlayheadChange,
   onSelectionChange,
-  filmstripUrls = [],
+  filmstripFrames = [],
 }: TimelineProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<TimelineViewport>(() => fitViewport(durationUs, 1000));
@@ -58,6 +63,22 @@ export function Timeline({
   const selectionLeft = selection ? timeToX(selection.start, viewport) : 0;
   const selectionRight = selection ? timeToX(selection.end, viewport) : viewport.widthPx;
   const playheadX = timeToX(playheadUs, viewport);
+  const visibleFilmstripFrames = filmstripFrames.filter(
+    (frame) => frame.timeUs >= viewport.startUs && frame.timeUs <= viewport.endUs,
+  );
+  const filmstripSampleUs =
+    filmstripFrames.length > 1
+      ? Math.max(1, filmstripFrames[1].timeUs - filmstripFrames[0].timeUs)
+      : Math.max(1, duration);
+  const filmstripFrameWidth = Math.max(
+    1,
+    Math.round(
+      Math.abs(
+        timeToX(viewport.startUs + filmstripSampleUs, viewport) -
+          timeToX(viewport.startUs, viewport),
+      ),
+    ),
+  );
 
   function surfaceX(clientX: number): number {
     const rect = surfaceRef.current?.getBoundingClientRect();
@@ -191,10 +212,21 @@ export function Timeline({
               data-testid={`timeline-lane-${lane.toLowerCase()}`}
             >
               <span className="timeline-lane-label">{lane}</span>
-              {lane === "Filmstrip" && filmstripUrls.length > 0 ? (
+              {lane === "Filmstrip" && visibleFilmstripFrames.length > 0 ? (
                 <div className="timeline-filmstrip">
-                  {filmstripUrls.map((url, index) => (
-                    <img key={url} src={url} alt={`Filmstrip ${index + 1}`} draggable={false} />
+                  {visibleFilmstripFrames.map((frame, index) => (
+                    <img
+                      key={frame.url}
+                      src={frame.url}
+                      alt={`Filmstrip ${index + 1}`}
+                      data-testid={`filmstrip-frame-${frame.timeUs}`}
+                      data-source-time-us={frame.timeUs}
+                      draggable={false}
+                      style={{
+                        left: Math.round(timeToX(frame.timeUs, viewport)),
+                        width: filmstripFrameWidth,
+                      }}
+                    />
                   ))}
                 </div>
               ) : null}
