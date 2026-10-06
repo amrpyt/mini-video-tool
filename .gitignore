@@ -8,3 +8,9 @@ _qa*
 bin/*.exe
 MiniVideoTool*.exe
 .worktrees/
+v2/node_modules/
+v2/dist/
+v2/*.tsbuildinfo
+v2/src-tauri/target/
+v2/src-tauri/gen/
+v2/src-tauri/binaries/*.exe
