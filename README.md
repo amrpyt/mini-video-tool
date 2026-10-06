@@ -1,5 +1,7 @@
 # Mini Video Tool
 
+> **v2 Preview:** النسخة الجديدة Tauri/React/Rust موجودة في `v2/` ومعها اختبارات Windows smoke وبناء MSI/NSIS. لم تستبدل v1 أو الإصدار المنشور بعد. تعليمات التشغيل والتحقق في `v2/README.md`، وحالة التحويل في `docs/superpowers/v2-cutover-checklist.md`.
+
 أداة ويندوز خفيفة لثلاث حاجات:
 
 1. **تحميل جزء فقط من يوتيوب** باستخدام `yt-dlp --download-sections` بدل تنزيل الفيديو كاملًا.
