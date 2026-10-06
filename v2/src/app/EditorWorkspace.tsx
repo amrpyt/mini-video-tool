@@ -34,10 +34,14 @@ export function EditorWorkspace() {
   const selection = state.project.selection;
   const durationUs = sourceDurationUs(state.project);
   const localSource = state.project.source.kind === "local" ? state.project.source : null;
+  const silenceAnalysisIdentity =
+    localSource && selection
+      ? `${localSource.path}|${selection.start}|${selection.end}`
+      : "silence-unavailable";
 
   useEffect(() => {
     setWaveform(null);
-  }, [localSource?.path]);
+  }, [silenceAnalysisIdentity]);
 
   async function runSilenceAnalysis(): Promise<SilenceAnalysis> {
     if (!localSource || !selection) {
@@ -227,6 +231,11 @@ function inspectorContent(
     case "Silence":
       return (
         <SilenceStep
+          analysisIdentity={
+            state.project.source.kind === "local" && state.project.selection
+              ? `${state.project.source.path}|${state.project.selection.start}|${state.project.selection.end}`
+              : "silence-unavailable"
+          }
           sourcePath={state.project.source.kind === "local" ? state.project.source.path : null}
           metadata={state.project.source.kind === "local" ? state.project.source.metadata : null}
           selection={state.project.selection}

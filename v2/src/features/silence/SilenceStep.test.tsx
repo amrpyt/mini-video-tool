@@ -67,6 +67,7 @@ describe("SilenceStep", () => {
 
     render(
       <SilenceStep
+        analysisIdentity="C:\\Video\\clip.mp4|0|10000000"
         sourcePath="C:\\Video\\clip.mp4"
         metadata={metadata}
         selection={{ start: 0, end: 10_000_000 }}
@@ -85,5 +86,60 @@ describe("SilenceStep", () => {
     fireEvent.click(screen.getByRole("button", { name: "تحليل الصمت" }));
     await waitFor(() => expect(runAnalysis).toHaveBeenCalledTimes(1));
     expect(actions.some((action) => action.type === "silence/setAnalysis")).toBe(true);
+  });
+
+  it("ignores a completed analysis after source or selection identity changes", async () => {
+    let resolveAnalysis!: (value: {
+      detectedRegions: TimeRange[];
+      waveformImage: string | null;
+    }) => void;
+    const runAnalysis = vi.fn(
+      () =>
+        new Promise<{
+          detectedRegions: TimeRange[];
+          waveformImage: string | null;
+        }>((resolve) => {
+          resolveAnalysis = resolve;
+        }),
+    );
+    const dispatch = vi.fn();
+    const onWaveform = vi.fn();
+    const props = {
+      sourcePath: "C:\\Video\\clip-a.mp4",
+      metadata,
+      selection: { start: 0, end: 10_000_000 },
+      detectedRegions: [] as TimeRange[],
+      acceptedRegions: [] as TimeRange[],
+      dispatch,
+      runAnalysis,
+      onWaveform,
+    };
+
+    const { rerender } = render(
+      <SilenceStep
+        {...props}
+        analysisIdentity="C:\\Video\\clip-a.mp4|0|10000000"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "تحليل الصمت" }));
+    expect(runAnalysis).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <SilenceStep
+        {...props}
+        sourcePath="C:\\Video\\clip-b.mp4"
+        analysisIdentity="C:\\Video\\clip-b.mp4|0|10000000"
+      />,
+    );
+    resolveAnalysis({
+      detectedRegions: [{ start: 1_000_000, end: 2_000_000 }],
+      waveformImage: "C:\\cache\\stale-wave.png",
+    });
+
+    await waitFor(() => expect(runAnalysis).toHaveBeenCalledTimes(1));
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "silence/setAnalysis" }),
+    );
+    expect(onWaveform).not.toHaveBeenCalled();
   });
 });

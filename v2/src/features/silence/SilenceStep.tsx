@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { isRangeCovered, type EditorAction } from "../../app/editorReducer";
 import type { SilenceAnalysis, SourceMetadata, TimeRange } from "../../lib/types";
 
 interface SilenceStepProps {
+  analysisIdentity: string;
   sourcePath: string | null;
   metadata: SourceMetadata | null;
   selection: TimeRange | null;
@@ -15,6 +16,7 @@ interface SilenceStepProps {
 }
 
 export function SilenceStep({
+  analysisIdentity,
   sourcePath,
   metadata,
   selection,
@@ -26,18 +28,32 @@ export function SilenceStep({
 }: SilenceStepProps) {
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const latestIdentityRef = useRef(analysisIdentity);
   const canAnalyze = Boolean(sourcePath && metadata?.hasAudio && selection);
+
+  useEffect(() => {
+    latestIdentityRef.current = analysisIdentity;
+    setStatus("idle");
+    setError(null);
+  }, [analysisIdentity]);
 
   async function analyze() {
     if (!canAnalyze || status === "running") return;
+    const requestIdentity = analysisIdentity;
     setStatus("running");
     setError(null);
     try {
       const result = await runAnalysis();
+      if (latestIdentityRef.current !== requestIdentity) {
+        return;
+      }
       dispatch({ type: "silence/setAnalysis", detectedRegions: result.detectedRegions });
       onWaveform(result.waveformImage);
       setStatus("idle");
     } catch (reason) {
+      if (latestIdentityRef.current !== requestIdentity) {
+        return;
+      }
       setStatus("error");
       setError(reason instanceof Error ? reason.message : String(reason));
     }
