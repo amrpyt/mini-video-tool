@@ -100,6 +100,80 @@ fn repeated_cancel_does_not_release_the_heavy_job_slot_while_termination_is_runn
 }
 
 #[test]
+fn failed_termination_after_finish_during_cancelling_keeps_pid_owned_and_retryable() {
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let attempts_for_terminator = Arc::clone(&attempts);
+    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let release_rx = Mutex::new(release_rx);
+    let manager = Arc::new(JobManager::with_terminator(move |pid| {
+        let attempt = {
+            let mut attempts = attempts_for_terminator.lock().expect("lock attempts");
+            attempts.push(pid);
+            attempts.len()
+        };
+
+        if attempt == 1 {
+            entered_tx.send(pid).expect("report first termination");
+            release_rx
+                .lock()
+                .expect("lock release receiver")
+                .recv()
+                .expect("release first termination");
+            return Err(io::Error::other("simulated taskkill failure"));
+        }
+
+        Ok(())
+    }));
+    let job = manager.begin(JobKind::Download).expect("start job");
+    manager.attach_process(job, 171).expect("attach process");
+
+    let cancelling_manager = Arc::clone(&manager);
+    let cancel = thread::spawn(move || cancelling_manager.cancel_active());
+    assert_eq!(entered_rx.recv().expect("termination started"), 171);
+    assert_eq!(
+        manager.status(job).expect("cancelling status"),
+        JobStatus::Cancelling
+    );
+
+    manager
+        .finish(job, JobOutcome::Completed)
+        .expect("stale finish during cancellation");
+    assert_eq!(
+        manager.status(job).expect("status after stale finish"),
+        JobStatus::Cancelling
+    );
+    assert!(manager.begin(JobKind::Export).is_err());
+
+    release_tx.send(()).expect("release failed termination");
+    assert!(cancel.join().expect("cancel thread").is_err());
+
+    assert_eq!(
+        manager
+            .status(job)
+            .expect("status after failed termination"),
+        JobStatus::Cancelling
+    );
+    assert!(manager.begin(JobKind::Export).is_err());
+
+    manager.cancel_active().expect("retry cancellation");
+    assert_eq!(*attempts.lock().expect("lock attempts"), vec![171, 171]);
+    assert_eq!(
+        manager.status(job).expect("final cancelled status"),
+        JobStatus::Cancelled
+    );
+
+    manager
+        .finish(job, JobOutcome::Completed)
+        .expect("stale completion stays cancelled");
+    assert_eq!(
+        manager.status(job).expect("status after stale completion"),
+        JobStatus::Cancelled
+    );
+    assert!(manager.begin(JobKind::Export).is_ok());
+}
+
+#[test]
 fn stale_completion_after_cancellation_never_becomes_completed() {
     let manager = JobManager::with_terminator(|_| Ok(()));
     let cancelled = manager.begin(JobKind::SilenceAnalysis).expect("start job");

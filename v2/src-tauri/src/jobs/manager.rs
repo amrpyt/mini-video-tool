@@ -166,7 +166,8 @@ impl JobManager {
                 .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))?;
 
             match record.status {
-                JobStatus::Cancelling | JobStatus::Cancelled => {
+                JobStatus::Cancelling => return Ok(()),
+                JobStatus::Cancelled => {
                     record.status = JobStatus::Cancelled;
                 }
                 JobStatus::Queued | JobStatus::Running => {
