@@ -14,3 +14,4 @@ v2/*.tsbuildinfo
 v2/src-tauri/target/
 v2/src-tauri/gen/
 v2/src-tauri/binaries/*.exe
+local-web/.cache/

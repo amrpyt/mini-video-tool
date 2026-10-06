@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mini Video Tool</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">يعمل محليًا على جهازك</p>
+          <h1>Mini Video Tool</h1>
+        </div>
+        <span id="health" class="status">جاري الفحص…</span>
+      </header>
+
+      <section class="card" id="source-card">
+        <div class="step-title"><span>1</span><h2>حط رابط يوتيوب</h2></div>
+        <div class="row">
+          <input id="youtube-url" dir="ltr" placeholder="https://youtu.be/..." autocomplete="off" />
+          <button id="read-btn" class="primary">قراءة الفيديو</button>
+        </div>
+        <p id="source-error" class="error hidden"></p>
+        <div id="video-info" class="video-info hidden">
+          <img id="thumb" alt="صورة الفيديو" />
+          <div>
+            <strong id="title"></strong>
+            <p id="duration"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card disabled" id="range-card">
+        <div class="step-title"><span>2</span><h2>حدد الجزء</h2></div>
+        <div class="range-grid">
+          <label>من ثانية <input id="start" type="number" min="0" step="0.1" value="0" /></label>
+          <label>إلى ثانية <input id="end" type="number" min="0" step="0.1" value="0" /></label>
+          <label>الجودة
+            <select id="quality">
+              <option value="p720">720p</option>
+              <option value="p1080">1080p</option>
+              <option value="p480">480p</option>
+              <option value="p360">360p</option>
+              <option value="best">Best</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">مش بننزل الفيديو كامل. الجزء اللي تحدده بس هو اللي هيتحمّل على جهازك.</p>
+      </section>
+
+      <section class="card disabled" id="analysis-card">
+        <div class="step-title"><span>3</span><h2>حلّل الصمت</h2></div>
+        <button id="analyze-btn" class="primary wide">تحميل الجزء وتحليل الصمت</button>
+        <p id="analysis-status" class="hint"></p>
+        <p id="analysis-error" class="error hidden"></p>
+        <div id="preview-wrap" class="preview hidden">
+          <video id="preview" controls></video>
+          <img id="waveform" class="waveform hidden" alt="الموجة الصوتية" />
+        </div>
+        <div id="silence-list" class="silence-list"></div>
+      </section>
+
+      <section class="card disabled" id="export-card">
+        <div class="step-title"><span>4</span><h2>صدّر</h2></div>
+        <p class="hint">شيل العلامة من أي منطقة صمت عايز تحتفظ بيها.</p>
+        <button id="export-btn" class="primary wide">تصدير الفيديو</button>
+        <p id="export-status" class="hint"></p>
+        <p id="export-error" class="error hidden"></p>
+        <div id="done" class="done hidden">
+          <strong>تم ✅</strong>
+          <code id="output-path" dir="ltr"></code>
+          <div class="row compact">
+            <a id="download-link" class="button-link" href="#">تنزيل الملف</a>
+            <button id="reveal-btn">فتح مكان الملف</button>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
+
