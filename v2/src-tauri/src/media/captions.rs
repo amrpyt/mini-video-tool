@@ -6,7 +6,6 @@ use std::{
 };
 
 use tauri::{AppHandle, Manager};
-use tauri_plugin_shell::ShellExt;
 
 use crate::{
     domain::{
@@ -14,7 +13,10 @@ use crate::{
         time::MediaTime,
     },
     error::AppError,
+    jobs::JobManager,
 };
+
+use super::process::run_auxiliary_sidecar;
 
 pub fn parse_srt(text: &str) -> Result<Vec<CaptionCue>, AppError> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -194,7 +196,11 @@ pub fn import_captions(path: &Path) -> Result<CaptionTrack, AppError> {
     Ok(track_from_cues(cues))
 }
 
-pub async fn youtube_captions(app: &AppHandle, url: &str) -> Result<CaptionTrack, AppError> {
+pub async fn youtube_captions(
+    app: &AppHandle,
+    manager: &JobManager,
+    url: &str,
+) -> Result<CaptionTrack, AppError> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| AppError::DownloadFailed(error.to_string()))?
@@ -226,15 +232,13 @@ pub async fn youtube_captions(app: &AppHandle, url: &str) -> Result<CaptionTrack
         );
     }
 
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .map_err(|error| AppError::DownloadFailed(error.to_string()))?
-        .args(args)
-        .output()
+    let output = run_auxiliary_sidecar(app, manager, "yt-dlp", args)
         .await
-        .map_err(|error| AppError::DownloadFailed(error.to_string()))?;
-    if !output.status.success() {
+        .map_err(AppError::DownloadFailed)?;
+    if !output.succeeded() {
+        if let Some(error) = output.process_error {
+            return Err(AppError::DownloadFailed(error));
+        }
         return Err(AppError::DownloadFailed(last_diagnostic(&output.stderr)));
     }
 

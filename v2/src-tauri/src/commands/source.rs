@@ -14,13 +14,21 @@ use crate::{
 };
 
 #[tauri::command]
-pub async fn probe_source(app: AppHandle, path: PathBuf) -> Result<SourceMetadata, AppError> {
-    ffprobe::probe_source(&app, &path).await
+pub async fn probe_source(
+    app: AppHandle,
+    jobs: State<'_, JobManager>,
+    path: PathBuf,
+) -> Result<SourceMetadata, AppError> {
+    ffprobe::probe_source(&app, jobs.inner(), &path).await
 }
 
 #[tauri::command]
-pub async fn youtube_metadata(app: AppHandle, url: String) -> Result<YouTubeMetadata, AppError> {
-    ytdlp::youtube_metadata(&app, &url).await
+pub async fn youtube_metadata(
+    app: AppHandle,
+    jobs: State<'_, JobManager>,
+    url: String,
+) -> Result<YouTubeMetadata, AppError> {
+    ytdlp::youtube_metadata(&app, jobs.inner(), &url).await
 }
 
 #[tauri::command]
@@ -35,15 +43,17 @@ pub async fn download_range(
 #[tauri::command]
 pub async fn extract_preview_frame(
     app: AppHandle,
+    jobs: State<'_, JobManager>,
     request: PreviewFrameRequest,
 ) -> Result<PathBuf, AppError> {
-    preview::extract_preview_frame(&app, &request).await
+    preview::extract_preview_frame(&app, jobs.inner(), &request).await
 }
 
 #[tauri::command]
 pub async fn extract_filmstrip(
     app: AppHandle,
+    jobs: State<'_, JobManager>,
     request: FilmstripRequest,
 ) -> Result<Vec<PathBuf>, AppError> {
-    preview::extract_filmstrip(&app, &request).await
+    preview::extract_filmstrip(&app, jobs.inner(), &request).await
 }

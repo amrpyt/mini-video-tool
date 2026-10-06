@@ -429,7 +429,7 @@ async fn run_export_job(
     job: JobId,
     request: ExportProjectRequest,
 ) -> Result<(), AppError> {
-    let capabilities = encoder::detect_encoder_capabilities(app).await;
+    let capabilities = encoder::detect_encoder_capabilities(app, manager).await;
     let settings = request.project.export;
     let selected = encoder::choose_encoder(
         &capabilities,
@@ -505,7 +505,7 @@ async fn run_export_job(
             return Err(AppError::ExportFailed(attempt.diagnostic()));
         }
 
-        let metadata = ffprobe::probe_source(app, &temp_output)
+        let metadata = ffprobe::probe_source(app, manager, &temp_output)
             .await
             .map_err(|error| {
                 AppError::ExportFailed(format!("export validation failed: {error}"))

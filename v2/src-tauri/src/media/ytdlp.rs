@@ -15,6 +15,8 @@ use crate::{
     media::ffprobe,
 };
 
+use super::process::run_auxiliary_sidecar;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct YouTubeMetadata {
@@ -180,19 +182,21 @@ pub fn parse_ytdlp_progress_line(line: &str) -> Option<JobProgress> {
     })
 }
 
-pub async fn youtube_metadata(app: &AppHandle, url: &str) -> Result<YouTubeMetadata, AppError> {
+pub async fn youtube_metadata(
+    app: &AppHandle,
+    manager: &JobManager,
+    url: &str,
+) -> Result<YouTubeMetadata, AppError> {
     if url.trim().is_empty() {
         return Err(AppError::InvalidInput("YouTube URL is required".into()));
     }
-    let output = app
-        .shell()
-        .sidecar("yt-dlp")
-        .map_err(|error| AppError::DownloadFailed(error.to_string()))?
-        .args(build_metadata_args(url))
-        .output()
+    let output = run_auxiliary_sidecar(app, manager, "yt-dlp", build_metadata_args(url))
         .await
-        .map_err(|error| AppError::DownloadFailed(error.to_string()))?;
-    if !output.status.success() {
+        .map_err(AppError::DownloadFailed)?;
+    if !output.succeeded() {
+        if let Some(error) = output.process_error {
+            return Err(AppError::DownloadFailed(error));
+        }
         return Err(AppError::DownloadFailed(last_diagnostic(&output.stderr)));
     }
     let stdout = String::from_utf8(output.stdout).map_err(|error| {
@@ -297,7 +301,7 @@ pub async fn download_range(
         )));
     }
     manager.finish(job, JobOutcome::Completed)?;
-    let metadata = ffprobe::probe_source(app, &path).await?;
+    let metadata = ffprobe::probe_source(app, manager, &path).await?;
     let source_offset = source_offset_for_download(request.selection, metadata.duration);
 
     Ok(ResolvedDownload {

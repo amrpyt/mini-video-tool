@@ -331,10 +331,45 @@ impl JobManager {
         }))
     }
 
+    pub fn attach_auxiliary_process(&self, pid: u32) -> Result<(), AppError> {
+        let mut state = self.lock_state()?;
+        if !state.auxiliary_pids.insert(pid) {
+            return Err(AppError::InvalidInput(
+                "auxiliary process is already registered".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn auxiliary_process_exited(&self, pid: u32) -> Result<(), AppError> {
+        let mut state = self.lock_state()?;
+        state.auxiliary_pids.remove(&pid);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn auxiliary_process_count(&self) -> Result<usize, AppError> {
+        Ok(self.lock_state()?.auxiliary_pids.len())
+    }
+
     fn lock_state(&self) -> Result<MutexGuard<'_, ManagerState>, AppError> {
         self.state
             .lock()
             .map_err(|_| AppError::InvalidInput("job state lock was poisoned".into()))
+    }
+}
+
+impl Drop for JobManager {
+    fn drop(&mut self) {
+        let state = match self.state.get_mut() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let mut pids = state.auxiliary_pids.drain().collect::<Vec<_>>();
+        pids.extend(state.jobs.values_mut().filter_map(|record| record.pid.take()));
+        for pid in pids {
+            let _ = (self.terminate)(pid);
+        }
     }
 }
 

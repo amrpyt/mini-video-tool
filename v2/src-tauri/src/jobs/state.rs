@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,7 @@ pub(crate) struct ManagerState {
     pub(crate) next_id: u64,
     pub(crate) active: Option<JobId>,
     pub(crate) jobs: HashMap<JobId, JobRecord>,
+    pub(crate) auxiliary_pids: HashSet<u32>,
 }
 
 impl ManagerState {
@@ -73,6 +74,7 @@ impl ManagerState {
             next_id: 0,
             active: None,
             jobs: HashMap::new(),
+            auxiliary_pids: HashSet::new(),
         }
     }
 }

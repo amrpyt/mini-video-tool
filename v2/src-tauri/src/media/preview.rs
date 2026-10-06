@@ -2,12 +2,14 @@ use std::{ffi::OsString, fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 
 use crate::{
     domain::time::{MediaTime, TimeRange},
     error::AppError,
+    jobs::JobManager,
 };
+
+use super::process::run_auxiliary_sidecar;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +91,7 @@ pub fn build_filmstrip_args(request: &FilmstripRequest) -> Result<Vec<OsString>,
 
 pub async fn extract_preview_frame(
     app: &AppHandle,
+    manager: &JobManager,
     request: &PreviewFrameRequest,
 ) -> Result<PathBuf, AppError> {
     if request.timestamp.0 < 0 {
@@ -104,12 +107,13 @@ pub async fn extract_preview_frame(
             ))
         })?;
     }
-    run_ffmpeg(app, build_preview_frame_args(request)).await?;
+    run_ffmpeg(app, manager, build_preview_frame_args(request)).await?;
     Ok(request.destination.clone())
 }
 
 pub async fn extract_filmstrip(
     app: &AppHandle,
+    manager: &JobManager,
     request: &FilmstripRequest,
 ) -> Result<Vec<PathBuf>, AppError> {
     let args = build_filmstrip_args(request)?;
@@ -119,7 +123,7 @@ pub async fn extract_filmstrip(
             request.destination_dir.display()
         ))
     })?;
-    run_ffmpeg(app, args).await?;
+    run_ffmpeg(app, manager, args).await?;
     Ok((1..=request.count)
         .map(|index| {
             request
@@ -129,17 +133,19 @@ pub async fn extract_filmstrip(
         .collect())
 }
 
-async fn run_ffmpeg(app: &AppHandle, args: Vec<OsString>) -> Result<(), AppError> {
-    let output = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|error| AppError::MediaProbeFailed(error.to_string()))?
-        .args(args)
-        .output()
+async fn run_ffmpeg(
+    app: &AppHandle,
+    manager: &JobManager,
+    args: Vec<OsString>,
+) -> Result<(), AppError> {
+    let output = run_auxiliary_sidecar(app, manager, "ffmpeg", args)
         .await
-        .map_err(|error| AppError::MediaProbeFailed(error.to_string()))?;
-    if output.status.success() {
+        .map_err(AppError::MediaProbeFailed)?;
+    if output.succeeded() {
         return Ok(());
+    }
+    if let Some(error) = output.process_error {
+        return Err(AppError::MediaProbeFailed(error));
     }
     let diagnostic = String::from_utf8_lossy(&output.stderr)
         .lines()

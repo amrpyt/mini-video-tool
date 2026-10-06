@@ -1,8 +1,13 @@
 use std::path::PathBuf;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
-use crate::{domain::project::CaptionTrack, error::AppError, media::captions};
+use crate::{
+    domain::project::CaptionTrack,
+    error::AppError,
+    jobs::JobManager,
+    media::captions,
+};
 
 #[tauri::command]
 pub async fn import_captions(path: PathBuf) -> Result<CaptionTrack, AppError> {
@@ -10,6 +15,10 @@ pub async fn import_captions(path: PathBuf) -> Result<CaptionTrack, AppError> {
 }
 
 #[tauri::command]
-pub async fn youtube_captions(app: AppHandle, url: String) -> Result<CaptionTrack, AppError> {
-    captions::youtube_captions(&app, &url).await
+pub async fn youtube_captions(
+    app: AppHandle,
+    jobs: State<'_, JobManager>,
+    url: String,
+) -> Result<CaptionTrack, AppError> {
+    captions::youtube_captions(&app, jobs.inner(), &url).await
 }

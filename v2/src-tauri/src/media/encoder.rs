@@ -1,9 +1,10 @@
 use std::ffi::OsString;
 
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 
-use crate::domain::render_plan::EncoderSelection;
+use crate::{domain::render_plan::EncoderSelection, jobs::JobManager};
+
+use super::process::run_auxiliary_sidecar;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EncoderCapabilities {
@@ -45,14 +46,17 @@ pub fn is_qsv_initialization_failure(diagnostic: &str) -> bool {
     mentions_qsv && mentions_initialization
 }
 
-pub async fn detect_encoder_capabilities(app: &AppHandle) -> EncoderCapabilities {
+pub async fn detect_encoder_capabilities(
+    app: &AppHandle,
+    manager: &JobManager,
+) -> EncoderCapabilities {
     let args = vec![OsString::from("-hide_banner"), OsString::from("-encoders")];
-    let Ok(command) = app.shell().sidecar("ffmpeg") else {
+    let Ok(output) = run_auxiliary_sidecar(app, manager, "ffmpeg", args).await else {
         return EncoderCapabilities::default();
     };
-    let Ok(output) = command.args(args).output().await else {
+    if !output.succeeded() {
         return EncoderCapabilities::default();
-    };
+    }
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     parse_encoder_capabilities(&text)

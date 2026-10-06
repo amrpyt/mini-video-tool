@@ -373,3 +373,38 @@ fn cancelling_by_stale_job_id_never_cancels_a_newer_operation() {
     assert_eq!(manager.status(first).unwrap(), JobStatus::Completed);
     assert_eq!(manager.status(second).unwrap(), JobStatus::Running);
 }
+
+#[test]
+fn auxiliary_processes_are_owned_without_consuming_the_heavy_job_slot() {
+    let manager = JobManager::with_terminator(|_| Ok(()));
+    manager
+        .attach_auxiliary_process(501)
+        .expect("register auxiliary process");
+    assert_eq!(manager.auxiliary_process_count().unwrap(), 1);
+
+    let heavy = manager.begin(JobKind::Export).expect("start heavy job");
+    assert_eq!(manager.status(heavy).unwrap(), JobStatus::Running);
+
+    manager
+        .auxiliary_process_exited(501)
+        .expect("unregister auxiliary process");
+    assert_eq!(manager.auxiliary_process_count().unwrap(), 0);
+}
+
+#[test]
+fn dropping_manager_terminates_owned_auxiliary_processes() {
+    let killed = Arc::new(Mutex::new(Vec::new()));
+    let killed_for_terminator = Arc::clone(&killed);
+    {
+        let manager = JobManager::with_terminator(move |pid| {
+            killed_for_terminator.lock().unwrap().push(pid);
+            Ok(())
+        });
+        manager.attach_auxiliary_process(601).unwrap();
+        manager.attach_auxiliary_process(602).unwrap();
+    }
+
+    let mut pids = killed.lock().unwrap().clone();
+    pids.sort_unstable();
+    assert_eq!(pids, vec![601, 602]);
+}

@@ -2,15 +2,16 @@ use std::{ffi::OsString, path::Path};
 
 use serde::Deserialize;
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
-
 use crate::{
     domain::{
         project::SourceMetadata,
         time::{FrameRate, MediaTime},
     },
     error::AppError,
+    jobs::JobManager,
 };
+
+use super::process::run_auxiliary_sidecar;
 
 #[derive(Deserialize)]
 struct ProbeDocument {
@@ -95,16 +96,18 @@ pub fn parse_ffprobe_json(json: &str) -> Result<SourceMetadata, AppError> {
     })
 }
 
-pub async fn probe_source(app: &AppHandle, path: &Path) -> Result<SourceMetadata, AppError> {
-    let output = app
-        .shell()
-        .sidecar("ffprobe")
-        .map_err(|error| AppError::MediaProbeFailed(error.to_string()))?
-        .args(build_probe_args(path))
-        .output()
+pub async fn probe_source(
+    app: &AppHandle,
+    manager: &JobManager,
+    path: &Path,
+) -> Result<SourceMetadata, AppError> {
+    let output = run_auxiliary_sidecar(app, manager, "ffprobe", build_probe_args(path))
         .await
-        .map_err(|error| AppError::MediaProbeFailed(error.to_string()))?;
-    if !output.status.success() {
+        .map_err(AppError::MediaProbeFailed)?;
+    if !output.succeeded() {
+        if let Some(error) = output.process_error {
+            return Err(AppError::MediaProbeFailed(error));
+        }
         return Err(AppError::MediaProbeFailed(last_diagnostic(&output.stderr)));
     }
 
