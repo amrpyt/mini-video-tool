@@ -1,5 +1,6 @@
 pub mod domain;
 pub mod error;
+pub mod jobs;
 pub mod project_io;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
