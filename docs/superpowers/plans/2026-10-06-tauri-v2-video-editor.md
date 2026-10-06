@@ -504,6 +504,8 @@ git commit -m "feat: add source-time editor timeline"
 - Create: `v2/src-tauri/src/media/silence.rs`
 - Create: `v2/src-tauri/src/commands/analysis.rs`
 - Create: `v2/src-tauri/tests/silence_analysis.rs`
+- Modify: `v2/src-tauri/src/media/mod.rs`
+- Modify: `v2/src-tauri/src/commands/mod.rs`
 - Create: `v2/src/features/silence/SilenceStep.tsx`
 - Create: `v2/src/features/silence/SilenceStep.test.tsx`
 - Modify: `v2/src/lib/backend.ts`
@@ -548,7 +550,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add v2/src-tauri/src/media/silence.rs v2/src-tauri/src/commands/analysis.rs v2/src-tauri/tests/silence_analysis.rs v2/src/features/silence v2/src/lib/backend.ts v2/src/components/timeline/Timeline.tsx
+git add v2/src-tauri/src/media/silence.rs v2/src-tauri/src/media/mod.rs v2/src-tauri/src/commands/analysis.rs v2/src-tauri/src/commands/mod.rs v2/src-tauri/tests/silence_analysis.rs v2/src/features/silence v2/src/lib/backend.ts v2/src/components/timeline/Timeline.tsx
 git commit -m "feat: add non-destructive silence review"
 ```
 
@@ -566,6 +568,7 @@ git commit -m "feat: add non-destructive silence review"
 - Create: `v2/src-tauri/src/media/captions.rs`
 - Create: `v2/src-tauri/src/commands/captions.rs`
 - Create: `v2/src-tauri/tests/captions.rs`
+- Modify: `v2/src-tauri/src/media/mod.rs`
 - Modify: `v2/src-tauri/src/commands/mod.rs`
 - Modify: `v2/src/components/Preview.tsx`
 - Modify: `v2/src/components/timeline/Timeline.tsx`
@@ -616,7 +619,7 @@ Expected: PASS and build exits 0.
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add v2/src/features v2/src/components/Preview.tsx v2/src/components/timeline/Timeline.tsx v2/src/lib/backend.ts v2/src-tauri/src/media/captions.rs v2/src-tauri/src/commands/captions.rs v2/src-tauri/src/commands/mod.rs v2/src-tauri/tests/captions.rs
+git add v2/src/features v2/src/components/Preview.tsx v2/src/components/timeline/Timeline.tsx v2/src/lib/backend.ts v2/src-tauri/src/media/captions.rs v2/src-tauri/src/media/mod.rs v2/src-tauri/src/commands/captions.rs v2/src-tauri/src/commands/mod.rs v2/src-tauri/tests/captions.rs
 git commit -m "feat: add live overlay and caption editing"
 ```
 
@@ -719,6 +722,8 @@ git commit -m "feat: add single-pass final export"
 - Create: `v2/src/components/ErrorNotice.test.tsx`
 - Create: `v2/src-tauri/src/commands/project.rs`
 - Create: `v2/src-tauri/tests/project_recovery.rs`
+- Modify: `v2/src-tauri/src/commands/mod.rs`
+- Modify: `v2/src-tauri/src/lib.rs`
 - Modify: `v2/src/app/EditorWorkspace.tsx`
 - Modify: `v2/src/lib/backend.ts`
 - Modify: `v2/src/styles.css`
