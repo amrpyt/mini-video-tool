@@ -23,6 +23,7 @@ import type {
 interface PreviewProps {
   source: EditorSource;
   playheadUs: number;
+  mediaPlayheadUs?: number;
   overlays?: EditorOverlay[];
   captionTrack?: CaptionTrack | null;
   selectedOverlayId?: string | null;
@@ -46,6 +47,7 @@ interface OverlayInteraction {
 export function Preview({
   source,
   playheadUs,
+  mediaPlayheadUs = playheadUs,
   overlays = [],
   captionTrack = null,
   selectedOverlayId = null,
@@ -98,11 +100,11 @@ export function Preview({
 
   useEffect(() => {
     if (source.kind !== "local" || nativeFailed || !videoRef.current) return;
-    const desiredSeconds = Math.max(0, playheadUs) / 1_000_000;
+    const desiredSeconds = Math.max(0, mediaPlayheadUs) / 1_000_000;
     if (Math.abs(videoRef.current.currentTime - desiredSeconds) > 0.001) {
       videoRef.current.currentTime = desiredSeconds;
     }
-  }, [nativeFailed, playheadUs, source]);
+  }, [mediaPlayheadUs, nativeFailed, source]);
 
   useEffect(() => {
     const fontPath = captionTrack?.style.fontPath;
@@ -129,7 +131,7 @@ export function Preview({
     setNativeFailed(true);
     setRequestingStill(true);
     try {
-      setStillUrl(await requestStillFrame(source.path, playheadUs));
+      setStillUrl(await requestStillFrame(source.path, mediaPlayheadUs));
     } finally {
       setRequestingStill(false);
     }

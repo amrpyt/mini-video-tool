@@ -99,6 +99,34 @@ describe("Preview", () => {
     expect(requestStillFrame).toHaveBeenCalledTimes(1);
   });
 
+  it("separates source-time edit visibility from physical local media seek time", async () => {
+    const requestStillFrame = vi.fn().mockResolvedValue("asset://preview.jpg");
+    render(
+      <Preview
+        source={localSource}
+        playheadUs={12_000_000}
+        mediaPlayheadUs={2_000_000}
+        overlays={[
+          {
+            id: "source-time-overlay",
+            kind: "blackBar",
+            range: { start: 11_000_000, end: 13_000_000 },
+            geometry: { x: 0, y: 0.8, width: 1, height: 0.2 },
+            opacity: 1,
+            assetPath: null,
+            aspectLocked: false,
+          },
+        ]}
+        requestStillFrame={requestStillFrame}
+        toAssetUrl={() => "asset://clip.mp4"}
+      />,
+    );
+
+    expect(screen.getByTestId("preview-overlay-source-time-overlay")).toBeInTheDocument();
+    fireEvent.error(screen.getByTestId("native-preview-video"));
+    await waitFor(() => expect(requestStillFrame).toHaveBeenCalledWith(localSource.path, 2_000_000));
+  });
+
   it("keeps caption left/right physical and measures vertical margin from frame height", () => {
     const style = {
       ...createDefaultCaptionStyle(),

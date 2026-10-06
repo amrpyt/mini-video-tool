@@ -4,6 +4,7 @@ import type {
   AnalyzeSilenceRequest,
   CaptionTrack,
   DownloadRangeRequest,
+  ExportProjectRequest,
   FilmstripRequest,
   PreviewFrameRequest,
   ResolvedDownload,
@@ -42,4 +43,8 @@ export function importCaptions(path: string): Promise<CaptionTrack> {
 
 export function getYouTubeCaptions(url: string): Promise<CaptionTrack> {
   return invoke("youtube_captions", { url });
+}
+
+export function exportProject(request: ExportProjectRequest): Promise<number> {
+  return invoke("export_project", { request });
 }

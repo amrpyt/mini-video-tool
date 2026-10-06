@@ -339,3 +339,23 @@ fn cancelling_only_terminates_the_active_job_process() {
         JobStatus::Cancelled
     );
 }
+
+#[test]
+fn cancelled_export_cannot_enter_atomic_publication() {
+    let manager = JobManager::with_terminator(|_| Ok(()));
+    let job = manager.begin(JobKind::Export).expect("start export");
+    manager
+        .cancel_active()
+        .expect("cancel export before publication");
+
+    let published = Arc::new(Mutex::new(false));
+    let published_for_closure = Arc::clone(&published);
+    let result = manager.complete_with(job, move || {
+        *published_for_closure.lock().expect("lock publication flag") = true;
+        Ok(())
+    });
+
+    assert!(matches!(result, Err(AppError::Cancelled)));
+    assert!(!*published.lock().expect("lock publication flag"));
+    assert_eq!(manager.status(job).expect("status"), JobStatus::Cancelled);
+}

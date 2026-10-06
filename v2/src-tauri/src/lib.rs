@@ -19,6 +19,7 @@ pub fn run() {
             commands::analysis::analyze_silence,
             commands::captions::import_captions,
             commands::captions::youtube_captions,
+            commands::export::export_project,
             commands::source::probe_source,
             commands::source::youtube_metadata,
             commands::source::download_range,

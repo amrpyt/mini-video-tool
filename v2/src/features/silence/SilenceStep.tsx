@@ -11,7 +11,7 @@ interface SilenceStepProps {
   detectedRegions: TimeRange[];
   acceptedRegions: TimeRange[];
   dispatch: (action: EditorAction) => void;
-  runAnalysis: () => Promise<SilenceAnalysis>;
+  runAnalysis: () => Promise<SilenceAnalysis | null>;
   onWaveform: (path: string | null) => void;
 }
 
@@ -44,6 +44,7 @@ export function SilenceStep({
     setError(null);
     try {
       const result = await runAnalysis();
+      if (!result) return;
       if (latestIdentityRef.current !== requestIdentity) {
         return;
       }

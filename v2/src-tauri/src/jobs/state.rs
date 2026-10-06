@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct JobId(pub u64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10,7 +12,7 @@ pub enum JobKind {
     Export,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum JobStatus {
     Queued,
     Running,

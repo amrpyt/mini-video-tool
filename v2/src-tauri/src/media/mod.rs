@@ -1,4 +1,7 @@
 pub mod captions;
+pub mod encoder;
+pub mod export;
+pub mod ffmpeg;
 pub mod ffprobe;
 pub mod preview;
 pub mod silence;

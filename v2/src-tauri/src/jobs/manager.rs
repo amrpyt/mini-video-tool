@@ -216,6 +216,48 @@ impl JobManager {
         Ok(())
     }
 
+    pub fn complete_with<F>(&self, job: JobId, finalize: F) -> Result<(), AppError>
+    where
+        F: FnOnce() -> Result<(), AppError>,
+    {
+        let mut state = self.lock_state()?;
+        let is_active = state.active == Some(job);
+        {
+            let record = state
+                .jobs
+                .get(&job)
+                .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))?;
+            match record.status {
+                JobStatus::Cancelling | JobStatus::Cancelled => return Err(AppError::Cancelled),
+                JobStatus::Queued | JobStatus::Running if is_active && record.pid.is_none() => {}
+                JobStatus::Completed => return Ok(()),
+                JobStatus::Failed => {
+                    return Err(AppError::InvalidInput(
+                        "failed job cannot publish a result".into(),
+                    ));
+                }
+                JobStatus::Queued | JobStatus::Running => {
+                    return Err(AppError::InvalidInput(
+                        "job cannot publish while a process is attached or inactive".into(),
+                    ));
+                }
+            }
+        }
+
+        finalize()?;
+
+        let record = state
+            .jobs
+            .get_mut(&job)
+            .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))?;
+        record.status = JobStatus::Completed;
+        record.pid = None;
+        if state.active == Some(job) {
+            state.active = None;
+        }
+        Ok(())
+    }
+
     pub fn status(&self, job: JobId) -> Result<JobStatus, AppError> {
         let state = self.lock_state()?;
         state

@@ -70,7 +70,8 @@ fn srt_rejects_malformed_blocks_instead_of_partially_importing_them() {
 
 #[test]
 fn srt_accepts_whitespace_only_block_separators() {
-    let source = "1\n00:00:01,000 --> 00:00:02,000\nOne\n   \n2\n00:00:03,000 --> 00:00:04,000\nTwo\n";
+    let source =
+        "1\n00:00:01,000 --> 00:00:02,000\nOne\n   \n2\n00:00:03,000 --> 00:00:04,000\nTwo\n";
     let cues = parse_srt(source).expect("parse whitespace-separated SRT cues");
     assert_eq!(cues.len(), 2);
     assert_eq!(cues[0].text, "One");

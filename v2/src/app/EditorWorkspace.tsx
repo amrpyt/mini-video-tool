@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appCacheDir, join } from "@tauri-apps/api/path";
-import { open } from "@tauri-apps/plugin-dialog";
-import { useEffect, useReducer, useState } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { useEffect, useReducer, useRef, useState } from "react";
 
 import { Inspector } from "../components/Inspector";
 import { Preview } from "../components/Preview";
@@ -10,16 +10,25 @@ import { Timeline, type FilmstripFrame } from "../components/timeline/Timeline";
 import { RangeStep } from "../features/range/RangeStep";
 import { CaptionsStep } from "../features/captions/CaptionsStep";
 import { DesignStep } from "../features/design/DesignStep";
+import { ExportStep } from "../features/export/ExportStep";
 import { formatTimeInput, frameStepUs } from "../features/range/timeInput";
 import { SilenceStep } from "../features/silence/SilenceStep";
 import { SourceStep } from "../features/source/SourceStep";
 import {
   analyzeSilence,
+  downloadRange,
   extractFilmstrip,
   getYouTubeCaptions,
   importCaptions,
 } from "../lib/backend";
-import type { CaptionTrack, SilenceAnalysis, TimeRange } from "../lib/types";
+import type {
+  CaptionTrack,
+  ResolvedDownload,
+  ResolvedExportInput,
+  SilenceAnalysis,
+  SourceMetadata,
+  TimeRange,
+} from "../lib/types";
 import {
   EDITOR_STEPS,
   createInitialEditorState,
@@ -34,19 +43,47 @@ import {
 
 export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
-  const filmstripFrames = useLocalFilmstrip(state.project.source);
   const [waveform, setWaveform] = useState<{ url: string; range: TimeRange } | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [exportPath, setExportPath] = useState("");
+  const [resolvedYouTube, setResolvedYouTube] = useState<{
+    identity: string;
+    value: ResolvedDownload;
+  } | null>(null);
 
   useEditorShortcuts(state, dispatch);
 
   const selection = state.project.selection;
   const durationUs = sourceDurationUs(state.project);
   const localSource = state.project.source.kind === "local" ? state.project.source : null;
+  const youtubeDownloadIdentity =
+    state.project.source.kind === "youtube" && selection
+      ? `${state.project.source.url}|${selection.start}|${selection.end}|${state.project.source.downloadQuality}`
+      : "youtube-download-unavailable";
+  const youtubeDownloadIdentityRef = useRef(youtubeDownloadIdentity);
+  youtubeDownloadIdentityRef.current = youtubeDownloadIdentity;
+  const activeYouTubeDownload =
+    resolvedYouTube?.identity === youtubeDownloadIdentity ? resolvedYouTube.value : null;
+  const filmstripFrames = useLocalFilmstrip(state.project.source, activeYouTubeDownload);
+  const analysisMedia = localSource
+    ? {
+        path: localSource.path,
+        metadata: localSource.metadata,
+        sourceOffset: 0,
+      }
+    : activeYouTubeDownload
+      ? {
+          path: activeYouTubeDownload.path,
+          metadata: activeYouTubeDownload.metadata,
+          sourceOffset: activeYouTubeDownload.sourceOffset,
+        }
+      : null;
   const silenceAnalysisIdentity =
-    localSource && selection
-      ? `${localSource.path}|${selection.start}|${selection.end}`
+    analysisMedia && selection
+      ? `${analysisMedia.path}|${analysisMedia.sourceOffset}|${selection.start}|${selection.end}`
       : "silence-unavailable";
+  const silenceAnalysisIdentityRef = useRef(silenceAnalysisIdentity);
+  silenceAnalysisIdentityRef.current = silenceAnalysisIdentity;
 
   useEffect(() => {
     setWaveform(null);
@@ -61,12 +98,15 @@ export function EditorWorkspace() {
 
   useEffect(() => {
     setSelectedOverlayId(null);
+    setExportPath("");
+    setResolvedYouTube(null);
   }, [sourceIdentity]);
 
-  async function runSilenceAnalysis(): Promise<SilenceAnalysis> {
-    if (!localSource || !selection) {
+  async function runSilenceAnalysis(): Promise<SilenceAnalysis | null> {
+    if (!analysisMedia || !selection) {
       throw new Error("تحليل الصمت يحتاج ملفًا محليًا وتحديدًا صالحًا.");
     }
+    const requestIdentity = silenceAnalysisIdentity;
     const cacheRoot = await appCacheDir();
     const waveformDestination = await join(
       cacheRoot,
@@ -74,15 +114,78 @@ export function EditorWorkspace() {
       "waveform",
       `wave-${selection.start}-${selection.end}.png`,
     );
-    return analyzeSilence({
-      source: localSource.path,
+    const result = await analyzeSilence({
+      source: analysisMedia.path,
       selection,
-      sourceOffset: 0,
-      localDuration: localSource.metadata.duration,
-      hasAudio: localSource.metadata.hasAudio,
+      sourceOffset: analysisMedia.sourceOffset,
+      localDuration: analysisMedia.metadata.duration,
+      hasAudio: analysisMedia.metadata.hasAudio,
       waveformDestination,
     });
+    return silenceAnalysisIdentityRef.current === requestIdentity ? result : null;
   }
+
+  async function resolveExportInput(): Promise<ResolvedExportInput | null> {
+    if (state.project.source.kind === "local") {
+      return {
+        path: state.project.source.path,
+        sourceOffset: 0,
+        metadata: state.project.source.metadata,
+      };
+    }
+    if (
+      state.project.source.kind !== "youtube" ||
+      !selection ||
+      requiresNarrowerYouTubeRange(state.project)
+    ) {
+      return null;
+    }
+    if (activeYouTubeDownload) {
+      return {
+        path: activeYouTubeDownload.path,
+        sourceOffset: activeYouTubeDownload.sourceOffset,
+        metadata: activeYouTubeDownload.metadata,
+      };
+    }
+
+    const requestIdentity = youtubeDownloadIdentity;
+    const cacheRoot = await appCacheDir();
+    const outputDir = await join(cacheRoot, "mini-video-tool-v2", "downloads");
+    const value = await downloadRange({
+      url: state.project.source.url,
+      selection,
+      sourceDuration: state.project.source.metadata.duration,
+      quality: state.project.source.downloadQuality,
+      outputDir,
+    });
+    if (youtubeDownloadIdentityRef.current !== requestIdentity) {
+      return null;
+    }
+    setResolvedYouTube({ identity: requestIdentity, value });
+    return {
+      path: value.path,
+      sourceOffset: value.sourceOffset,
+      metadata: value.metadata,
+    };
+  }
+
+  const previewCanUseResolved =
+    state.project.source.kind === "youtube" &&
+    activeYouTubeDownload !== null &&
+    state.playheadUs >= activeYouTubeDownload.sourceOffset &&
+    state.playheadUs <= activeYouTubeDownload.sourceOffset + activeYouTubeDownload.metadata.duration;
+  const previewSource = previewCanUseResolved && activeYouTubeDownload
+    ? {
+        kind: "local" as const,
+        path: activeYouTubeDownload.path,
+        metadata: activeYouTubeDownload.metadata,
+        downloadQuality: state.project.source.downloadQuality,
+      }
+    : state.project.source;
+  const previewMediaPlayheadUs =
+    previewCanUseResolved && activeYouTubeDownload
+      ? state.playheadUs - activeYouTubeDownload.sourceOffset
+      : state.playheadUs;
 
   return (
     <div className="app-shell" dir="rtl">
@@ -129,8 +232,9 @@ export function EditorWorkspace() {
           </div>
           <div className="preview-stage">
             <Preview
-              source={state.project.source}
+              source={previewSource}
               playheadUs={state.playheadUs}
+              mediaPlayheadUs={previewMediaPlayheadUs}
               overlays={state.project.overlays}
               captionTrack={state.project.captions}
               selectedOverlayId={selectedOverlayId}
@@ -148,6 +252,9 @@ export function EditorWorkspace() {
         >
           {inspectorContent(state, dispatch, {
             runAnalysis: runSilenceAnalysis,
+            analysisIdentity: silenceAnalysisIdentity,
+            analysisSourcePath: analysisMedia?.path ?? null,
+            analysisMetadata: analysisMedia?.metadata ?? null,
             onWaveform: (path) => {
               if (!path || !selection) {
                 setWaveform(null);
@@ -164,6 +271,27 @@ export function EditorWorkspace() {
               return getYouTubeCaptions(state.project.source.url);
             },
             chooseFont: chooseFontFile,
+            exportPath,
+            resolvedExportInput:
+              state.project.source.kind === "local"
+                ? {
+                    path: state.project.source.path,
+                    sourceOffset: 0,
+                    metadata: state.project.source.metadata,
+                  }
+                : activeYouTubeDownload
+                  ? {
+                      path: activeYouTubeDownload.path,
+                      sourceOffset: activeYouTubeDownload.sourceOffset,
+                      metadata: activeYouTubeDownload.metadata,
+                    }
+                  : null,
+            resolveExportInput,
+            chooseExportOutput: async () => {
+              const selected = await chooseExportFile();
+              if (selected) setExportPath(selected);
+              return selected;
+            },
           })}
         </Inspector>
       </main>
@@ -248,7 +376,10 @@ function inspectorContent(
   state: EditorState,
   dispatch: (action: EditorAction) => void,
   silenceRuntime: {
-    runAnalysis: () => Promise<SilenceAnalysis>;
+    runAnalysis: () => Promise<SilenceAnalysis | null>;
+    analysisIdentity: string;
+    analysisSourcePath: string | null;
+    analysisMetadata: SourceMetadata | null;
     onWaveform: (path: string | null) => void;
     selectedOverlayId: string | null;
     onSelectOverlay: (id: string | null) => void;
@@ -256,6 +387,10 @@ function inspectorContent(
     importCaptions: () => Promise<CaptionTrack | null>;
     loadYouTubeCaptions: () => Promise<CaptionTrack | null>;
     chooseFont: () => Promise<string | null>;
+    exportPath: string;
+    resolvedExportInput: ResolvedExportInput | null;
+    resolveExportInput: () => Promise<ResolvedExportInput | null>;
+    chooseExportOutput: () => Promise<string | null>;
   },
 ) {
   switch (state.activeStep) {
@@ -265,26 +400,22 @@ function inspectorContent(
       return <RangeStep state={state} dispatch={dispatch} />;
     case "Export":
       return (
-        <StepPlaceholder
-          title="مراجعة التصدير"
-          text={
-            requiresNarrowerYouTubeRange(state.project)
-              ? "حدد جزءًا أصغر من فيديو يوتيوب قبل التصدير."
-              : "إعدادات التصدير التفصيلية هتتضاف في مرحلة التصدير، والمشروع الحالي محفوظ كما هو."
-          }
-          warning={requiresNarrowerYouTubeRange(state.project)}
+        <ExportStep
+          project={state.project}
+          outputPath={silenceRuntime.exportPath}
+          onChooseOutput={silenceRuntime.chooseExportOutput}
+          resolvedInput={silenceRuntime.resolvedExportInput}
+          resolveInput={silenceRuntime.resolveExportInput}
         />
       );
     case "Silence":
       return (
         <SilenceStep
           analysisIdentity={
-            state.project.source.kind === "local" && state.project.selection
-              ? `${state.project.source.path}|${state.project.selection.start}|${state.project.selection.end}`
-              : "silence-unavailable"
+            silenceRuntime.analysisIdentity
           }
-          sourcePath={state.project.source.kind === "local" ? state.project.source.path : null}
-          metadata={state.project.source.kind === "local" ? state.project.source.metadata : null}
+          sourcePath={silenceRuntime.analysisSourcePath}
+          metadata={silenceRuntime.analysisMetadata}
           selection={state.project.selection}
           detectedRegions={state.project.silence.detectedRegions}
           acceptedRegions={state.project.silence.acceptedRemovedRegions}
@@ -351,6 +482,14 @@ async function chooseFontFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+async function chooseExportFile(): Promise<string | null> {
+  const selected = await save({
+    filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+    defaultPath: "final.mp4",
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 function StepPlaceholder({ title, text, warning = false }: { title: string; text: string; warning?: boolean }) {
   return (
     <div className="step-placeholder">
@@ -406,10 +545,21 @@ function useEditorShortcuts(state: EditorState, dispatch: (action: EditorAction)
   }, [dispatch, state]);
 }
 
-function useLocalFilmstrip(source: EditorState["project"]["source"]): FilmstripFrame[] {
+function useLocalFilmstrip(
+  source: EditorState["project"]["source"],
+  resolvedYouTube: ResolvedDownload | null,
+): FilmstripFrame[] {
   const [frames, setFrames] = useState<FilmstripFrame[]>([]);
-  const localPath = source.kind === "local" ? source.path : null;
-  const localDuration = source.kind === "local" ? source.metadata.duration : 0;
+  const localPath =
+    source.kind === "local" ? source.path : source.kind === "youtube" ? resolvedYouTube?.path ?? null : null;
+  const localDuration =
+    source.kind === "local"
+      ? source.metadata.duration
+      : source.kind === "youtube"
+        ? resolvedYouTube?.metadata.duration ?? 0
+        : 0;
+  const sourceOffset =
+    source.kind === "youtube" && resolvedYouTube ? resolvedYouTube.sourceOffset : 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -436,7 +586,8 @@ function useLocalFilmstrip(source: EditorState["project"]["source"]): FilmstripF
           setFrames(
             paths.map((path, index) => ({
               url: convertFileSrc(path),
-              timeUs: count > 0 ? Math.round((index * localDuration) / count) : 0,
+              timeUs:
+                sourceOffset + (count > 0 ? Math.round((index * localDuration) / count) : 0),
             })),
           );
         }
@@ -449,7 +600,7 @@ function useLocalFilmstrip(source: EditorState["project"]["source"]): FilmstripF
     return () => {
       cancelled = true;
     };
-  }, [localDuration, localPath]);
+  }, [localDuration, localPath, sourceOffset]);
 
   return frames;
 }

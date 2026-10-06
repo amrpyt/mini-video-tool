@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::AppError;
 
 use super::{
@@ -7,14 +9,16 @@ use super::{
     time::{MediaTime, TimeRange},
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvedInput {
     pub path: PathBuf,
     pub source_offset: MediaTime,
     pub metadata: SourceMetadata,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum EncoderSelection {
     CpuX264,
     IntelQsv,

@@ -108,12 +108,15 @@ describe("DesignStep", () => {
     Object.defineProperty(resize, "releasePointerCapture", { value: vi.fn() });
     fireEvent.pointerDown(resize, { pointerId: 2, clientX: 400, clientY: 200 });
     fireEvent.pointerMove(resize, { pointerId: 2, clientX: 500, clientY: 250 });
-    expect(onGeometryChange).toHaveBeenLastCalledWith(overlay.id, {
-      x: 0.1,
-      y: 0.1,
-      width: 0.45,
-      height: 0.3,
-    });
+    const [, resized] = onGeometryChange.mock.calls.at(-1) as [string, typeof overlay.geometry];
+    expect(resized.x).toBe(0.1);
+    expect(resized.y).toBe(0.1);
+    expect(resized.width).toBeGreaterThan(overlay.geometry.width);
+    expect(resized.height).toBeGreaterThan(overlay.geometry.height);
+    expect(resized.width / resized.height).toBeCloseTo(
+      overlay.geometry.width / overlay.geometry.height,
+      6,
+    );
     fireEvent.pointerUp(resize, { pointerId: 2, clientX: 500, clientY: 250 });
   });
 });

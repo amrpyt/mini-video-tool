@@ -117,3 +117,39 @@ export interface CaptionTrack {
   cues: CaptionCue[];
   style: CaptionStyle;
 }
+
+export interface CanonicalProjectSource {
+  path: string | null;
+  metadata: SourceMetadata | null;
+  downloadQuality: DownloadQuality;
+}
+
+export interface CanonicalExportProject {
+  schemaVersion: 1;
+  source: CanonicalProjectSource;
+  selection: TimeRange | null;
+  silence: {
+    detectedRegions: TimeRange[];
+    acceptedRemovedRegions: TimeRange[];
+  };
+  overlays: EditorOverlay[];
+  captions: CaptionTrack;
+  export: {
+    width: number;
+    height: number;
+    frameRate: FrameRate;
+  };
+}
+
+export interface ResolvedExportInput {
+  path: string;
+  sourceOffset: MediaTime;
+  metadata: SourceMetadata;
+}
+
+export interface ExportProjectRequest {
+  project: CanonicalExportProject;
+  input: ResolvedExportInput;
+  output: string;
+  preferHardware: boolean;
+}

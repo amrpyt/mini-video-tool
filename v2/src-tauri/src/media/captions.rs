@@ -33,7 +33,9 @@ pub fn parse_srt(text: &str) -> Result<Vec<CaptionCue>, AppError> {
         blocks.push(current);
     }
     if blocks.is_empty() {
-        return Err(AppError::InvalidInput("caption file contains no SRT cues".into()));
+        return Err(AppError::InvalidInput(
+            "caption file contains no SRT cues".into(),
+        ));
     }
 
     let mut cues = Vec::new();

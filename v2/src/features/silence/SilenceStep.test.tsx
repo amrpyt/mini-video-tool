@@ -142,4 +142,55 @@ describe("SilenceStep", () => {
     );
     expect(onWaveform).not.toHaveBeenCalled();
   });
+
+  it("ignores a completed analysis after the step unmounts and the parent source identity changes", async () => {
+    let resolveBackend!: (value: {
+      detectedRegions: TimeRange[];
+      waveformImage: string | null;
+    }) => void;
+    let currentParentIdentity = "C:\\Video\\clip-a.mp4|0|10000000";
+    const backendPromise = new Promise<{
+      detectedRegions: TimeRange[];
+      waveformImage: string | null;
+    }>((resolve) => {
+      resolveBackend = resolve;
+    });
+    const runAnalysis = vi.fn(async () => {
+      const requestIdentity = currentParentIdentity;
+      const result = await backendPromise;
+      return currentParentIdentity === requestIdentity ? result : null;
+    });
+    const dispatch = vi.fn();
+    const onWaveform = vi.fn();
+
+    const rendered = render(
+      <SilenceStep
+        analysisIdentity={currentParentIdentity}
+        sourcePath="C:\\Video\\clip-a.mp4"
+        metadata={metadata}
+        selection={{ start: 0, end: 10_000_000 }}
+        detectedRegions={[]}
+        acceptedRegions={[]}
+        dispatch={dispatch}
+        runAnalysis={runAnalysis}
+        onWaveform={onWaveform}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "تحليل الصمت" }));
+    expect(runAnalysis).toHaveBeenCalledTimes(1);
+
+    rendered.unmount();
+    currentParentIdentity = "C:\\Video\\clip-b.mp4|0|10000000";
+    resolveBackend({
+      detectedRegions: [{ start: 1_000_000, end: 2_000_000 }],
+      waveformImage: "C:\\cache\\stale-wave.png",
+    });
+    await backendPromise;
+    await Promise.resolve();
+
+    expect(dispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "silence/setAnalysis" }),
+    );
+    expect(onWaveform).not.toHaveBeenCalled();
+  });
 });
