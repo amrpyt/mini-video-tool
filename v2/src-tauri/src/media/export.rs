@@ -126,7 +126,7 @@ pub fn prepare_render_assets(
             &ass_path,
             render_ass(plan, &style, resolved_font_name.as_deref()),
         )
-            .map_err(export_io_error("write caption asset", &ass_path))?;
+        .map_err(export_io_error("write caption asset", &ass_path))?;
         prepared.caption_ass = Some(ass_path);
     }
 
@@ -581,8 +581,10 @@ pub fn validate_export_request(request: &ExportProjectRequest) -> Result<(), App
             "resolve export source",
             &request.input.path,
         ))?;
-        let output = fs::canonicalize(&request.output)
-            .map_err(export_io_error("resolve export destination", &request.output))?;
+        let output = fs::canonicalize(&request.output).map_err(export_io_error(
+            "resolve export destination",
+            &request.output,
+        ))?;
         if same_path(&input, &output) {
             return Err(AppError::InvalidInput(
                 "export destination must be different from the source file".into(),
@@ -669,7 +671,10 @@ fn read_font_family(path: &Path) -> Result<String, AppError> {
         ))
     })?;
     let names = face.names();
-    for wanted in [ttf_parser::name_id::TYPOGRAPHIC_FAMILY, ttf_parser::name_id::FAMILY] {
+    for wanted in [
+        ttf_parser::name_id::TYPOGRAPHIC_FAMILY,
+        ttf_parser::name_id::FAMILY,
+    ] {
         if let Some(name) = names
             .into_iter()
             .filter(|name| name.name_id == wanted)

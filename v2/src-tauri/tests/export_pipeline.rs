@@ -19,9 +19,9 @@ use mini_video_tool_v2::{
     media::{
         encoder::{EncoderCapabilities, choose_encoder, is_qsv_initialization_failure},
         export::{
-            build_ffmpeg_args, build_filter_graph, parse_ffmpeg_progress, prepare_render_assets,
-            publish_temp_output, validate_export_request, validate_rendered_output,
-            ExportProjectRequest,
+            ExportProjectRequest, build_ffmpeg_args, build_filter_graph, parse_ffmpeg_progress,
+            prepare_render_assets, publish_temp_output, validate_export_request,
+            validate_rendered_output,
         },
         ffmpeg::FfmpegAttempt,
     },
@@ -369,7 +369,10 @@ fn rendered_output_validation_rejects_truncation_and_missing_required_audio() {
 #[test]
 fn custom_caption_font_uses_internal_family_not_renamed_file_stem() {
     let system_font = PathBuf::from(r"C:\Windows\Fonts\arial.ttf");
-    assert!(system_font.is_file(), "Windows Arial font fixture is unavailable");
+    assert!(
+        system_font.is_file(),
+        "Windows Arial font fixture is unavailable"
+    );
     let root = temp_dir("font-family");
     let renamed_font = root.join("totally-renamed-caption-font.ttf");
     fs::copy(&system_font, &renamed_font).unwrap();
@@ -393,7 +396,10 @@ fn custom_caption_font_uses_internal_family_not_renamed_file_stem() {
         .lines()
         .find(|line| line.starts_with("Style: Default,"))
         .unwrap();
-    assert!(style.starts_with("Style: Default,Arial,"), "unexpected style: {style}");
+    assert!(
+        style.starts_with("Style: Default,Arial,"),
+        "unexpected style: {style}"
+    );
     assert!(!style.contains("totally-renamed-caption-font"));
     let _ = fs::remove_dir_all(root);
 }
