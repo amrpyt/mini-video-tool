@@ -250,7 +250,10 @@ pub async fn download_range(
                 }
             }
             CommandEvent::Error(error) => process_error = Some(error),
-            CommandEvent::Terminated(payload) => exit_code = payload.code,
+            CommandEvent::Terminated(payload) => {
+                manager.process_exited(job)?;
+                exit_code = payload.code;
+            }
             _ => {}
         }
     }

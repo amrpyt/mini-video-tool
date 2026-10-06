@@ -135,13 +135,18 @@ impl JobManager {
             && let Err(error) = (self.terminate)(pid)
         {
             let mut state = self.lock_state()?;
+            let mut restored = false;
             if let Some(record) = state.jobs.get_mut(&job)
                 && record.status == JobStatus::Cancelling
                 && record.pid.is_none()
             {
                 record.pid = Some(pid);
+                restored = true;
             }
-            return Err(termination_error(kind, pid, error));
+            if restored {
+                return Err(termination_error(kind, pid, error));
+            }
+            return Ok(());
         }
 
         let mut state = self.lock_state()?;
@@ -152,6 +157,28 @@ impl JobManager {
             record.pid = None;
         }
         if state.active == Some(job) {
+            state.active = None;
+        }
+        Ok(())
+    }
+
+    pub fn process_exited(&self, job: JobId) -> Result<(), AppError> {
+        let mut state = self.lock_state()?;
+        let cancelled = {
+            let record = state
+                .jobs
+                .get_mut(&job)
+                .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))?;
+            record.pid = None;
+            if record.status == JobStatus::Cancelling {
+                record.status = JobStatus::Cancelled;
+                true
+            } else {
+                false
+            }
+        };
+
+        if cancelled && state.active == Some(job) {
             state.active = None;
         }
         Ok(())

@@ -174,6 +174,57 @@ fn failed_termination_after_finish_during_cancelling_keeps_pid_owned_and_retryab
 }
 
 #[test]
+fn observed_process_exit_during_failed_cancellation_releases_slot_without_restoring_dead_pid() {
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let attempts_for_terminator = Arc::clone(&attempts);
+    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let release_rx = Mutex::new(release_rx);
+    let manager = Arc::new(JobManager::with_terminator(move |pid| {
+        attempts_for_terminator
+            .lock()
+            .expect("lock attempts")
+            .push(pid);
+        entered_tx.send(pid).expect("report termination attempt");
+        release_rx
+            .lock()
+            .expect("lock release receiver")
+            .recv()
+            .expect("release termination attempt");
+        Err(io::Error::other("process already exited"))
+    }));
+    let job = manager.begin(JobKind::Download).expect("start job");
+    manager.attach_process(job, 181).expect("attach process");
+
+    let cancelling_manager = Arc::clone(&manager);
+    let cancel = thread::spawn(move || cancelling_manager.cancel_active());
+    assert_eq!(entered_rx.recv().expect("termination started"), 181);
+    assert_eq!(
+        manager.status(job).expect("cancelling status"),
+        JobStatus::Cancelling
+    );
+
+    manager
+        .process_exited(job)
+        .expect("record authoritative child exit");
+    manager
+        .finish(job, JobOutcome::Completed)
+        .expect("stale completion cannot win");
+    assert_eq!(
+        manager.status(job).expect("status after observed exit"),
+        JobStatus::Cancelled
+    );
+
+    release_tx.send(()).expect("release failed taskkill");
+    cancel
+        .join()
+        .expect("cancel thread")
+        .expect("observed exit resolves cancellation");
+    assert_eq!(*attempts.lock().expect("lock attempts"), vec![181]);
+    assert!(manager.begin(JobKind::Export).is_ok());
+}
+
+#[test]
 fn stale_completion_after_cancellation_never_becomes_completed() {
     let manager = JobManager::with_terminator(|_| Ok(()));
     let cancelled = manager.begin(JobKind::SilenceAnalysis).expect("start job");
