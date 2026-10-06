@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 
 import type { EditorAction, EditorState } from "../../app/editorReducer";
@@ -26,8 +27,8 @@ export function SourceStep({ state, dispatch }: SourceStepProps) {
     state.project.source.kind === "youtube" ? state.project.source.url : "",
   );
 
-  async function inspectLocal() {
-    const path = localPath.trim();
+  async function inspectLocalPath(inputPath: string) {
+    const path = inputPath.trim();
     if (!path) {
       dispatch({ type: "source/setStatus", status: { kind: "error", message: "اكتب مسار الفيديو المحلي" } });
       return;
@@ -42,6 +43,26 @@ export function SourceStep({ state, dispatch }: SourceStepProps) {
         status: { kind: "error", message: error instanceof Error ? error.message : "تعذر فحص الملف" },
       });
     }
+  }
+
+  async function inspectLocal() {
+    await inspectLocalPath(localPath);
+  }
+
+  async function chooseLocal() {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        {
+          name: "Video",
+          extensions: ["mp4", "mov", "mkv", "webm", "m4v", "avi", "ts"],
+        },
+      ],
+    });
+    if (typeof selected !== "string") return;
+    setLocalPath(selected);
+    await inspectLocalPath(selected);
   }
 
   async function inspectYouTube() {
@@ -78,9 +99,14 @@ export function SourceStep({ state, dispatch }: SourceStepProps) {
           onChange={(event) => setLocalPath(event.target.value)}
           placeholder="C:\\Videos\\clip.mp4"
         />
-        <button type="button" className="primary-button" onClick={inspectLocal}>
-          فحص الملف المحلي
-        </button>
+        <div className="source-file-actions">
+          <button type="button" className="primary-button" onClick={chooseLocal}>
+            اختيار ملف فيديو
+          </button>
+          <button type="button" className="secondary-button" onClick={inspectLocal}>
+            فحص المسار المكتوب
+          </button>
+        </div>
       </section>
 
       <div className="section-divider" role="separator" />

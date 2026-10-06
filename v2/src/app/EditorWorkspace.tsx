@@ -1,10 +1,15 @@
-import { useEffect, useReducer } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { appCacheDir, join } from "@tauri-apps/api/path";
+import { useEffect, useReducer, useState } from "react";
 
 import { Inspector } from "../components/Inspector";
+import { Preview } from "../components/Preview";
 import { Stepper, STEP_LABELS } from "../components/Stepper";
+import { Timeline } from "../components/timeline/Timeline";
 import { RangeStep } from "../features/range/RangeStep";
 import { formatTimeInput, frameStepUs } from "../features/range/timeInput";
 import { SourceStep } from "../features/source/SourceStep";
+import { extractFilmstrip } from "../lib/backend";
 import {
   EDITOR_STEPS,
   createInitialEditorState,
@@ -19,14 +24,12 @@ import {
 
 export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
+  const filmstripUrls = useLocalFilmstrip(state.project.source);
 
   useEditorShortcuts(state, dispatch);
 
   const selection = state.project.selection;
   const durationUs = sourceDurationUs(state.project);
-  const startPercent = durationUs > 0 && selection ? (selection.start / durationUs) * 100 : 0;
-  const endPercent = durationUs > 0 && selection ? (selection.end / durationUs) * 100 : 100;
-  const playheadPercent = durationUs > 0 ? (state.playheadUs / durationUs) * 100 : 0;
 
   return (
     <div className="app-shell" dir="rtl">
@@ -71,7 +74,9 @@ export function EditorWorkspace() {
                 : "معاينة مباشرة"}
             </span>
           </div>
-          <div className="preview-stage">{previewContent(state)}</div>
+          <div className="preview-stage">
+            <Preview source={state.project.source} playheadUs={state.playheadUs} />
+          </div>
         </section>
 
         <Inspector
@@ -91,25 +96,16 @@ export function EditorWorkspace() {
               : "—"}
           </span>
         </div>
-        <div
-          className="timeline-track"
-          data-start-us={selection?.start ?? ""}
-          data-end-us={selection?.end ?? ""}
-          data-duration-us={durationUs}
-          aria-label="نطاق المصدر الكامل"
-        >
-          {selection && durationUs > 0 ? (
-            <>
-              <span
-                className="timeline-selection"
-                style={{ left: `${startPercent}%`, width: `${Math.max(0, endPercent - startPercent)}%` }}
-              />
-              <span className="timeline-handle timeline-handle-start" data-handle="start" style={{ left: `${startPercent}%` }} />
-              <span className="timeline-handle timeline-handle-end" data-handle="end" style={{ left: `${endPercent}%` }} />
-            </>
-          ) : null}
-          <span className="timeline-playhead" style={{ left: `${playheadPercent}%` }} />
-        </div>
+        <Timeline
+          durationUs={durationUs}
+          selection={selection}
+          playheadUs={state.playheadUs}
+          filmstripUrls={filmstripUrls}
+          onPlayheadChange={(valueUs) => dispatch({ type: "playhead/set", valueUs })}
+          onSelectionChange={(nextSelection) =>
+            dispatch({ type: "project/setSelection", selection: nextSelection })
+          }
+        />
         <div className="timeline-status">
           <span>{durationUs > 0 ? `مدة المصدر ${formatTimeInput(durationUs)}` : "لم يتم اختيار مصدر"}</span>
           {requiresNarrowerYouTubeRange(state.project) ? (
@@ -198,28 +194,6 @@ function StepPlaceholder({ title, text, warning = false }: { title: string; text
   );
 }
 
-function previewContent(state: EditorState) {
-  const source = state.project.source;
-  if (source.kind === "youtube") {
-    return (
-      <div className="preview-source-card">
-        {source.metadata.thumbnailUrl ? <img src={source.metadata.thumbnailUrl} alt="معاينة فيديو يوتيوب" /> : null}
-        <strong>{source.metadata.title}</strong>
-        <span>المعاينة الحالية من البيانات والصورة فقط؛ لم يبدأ تحميل الفيديو.</span>
-      </div>
-    );
-  }
-  if (source.kind === "local") {
-    return (
-      <div className="preview-source-card">
-        <strong>{source.path}</strong>
-        <span>معاينة الفيديو الفعلية هتستخدم نفس المساحة الثابتة في خطوة الخط الزمني.</span>
-      </div>
-    );
-  }
-  return <span>اختَر مصدرًا لبدء التحرير</span>;
-}
-
 function useEditorShortcuts(state: EditorState, dispatch: (action: EditorAction) => void) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -263,4 +237,44 @@ function useEditorShortcuts(state: EditorState, dispatch: (action: EditorAction)
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [dispatch, state]);
+}
+
+function useLocalFilmstrip(source: EditorState["project"]["source"]): string[] {
+  const [urls, setUrls] = useState<string[]>([]);
+  const localPath = source.kind === "local" ? source.path : null;
+  const localDuration = source.kind === "local" ? source.metadata.duration : 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!localPath || localDuration <= 0) {
+      setUrls([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const sourcePath = localPath;
+
+    async function loadFilmstrip() {
+      try {
+        const cacheRoot = await appCacheDir();
+        const destinationDir = await join(cacheRoot, "mini-video-tool-v2", "filmstrip");
+        const paths = await extractFilmstrip({
+          source: sourcePath,
+          range: { start: 0, end: localDuration },
+          count: 12,
+          destinationDir,
+        });
+        if (!cancelled) setUrls(paths.map((path) => convertFileSrc(path)));
+      } catch {
+        if (!cancelled) setUrls([]);
+      }
+    }
+
+    void loadFilmstrip();
+    return () => {
+      cancelled = true;
+    };
+  }, [localDuration, localPath]);
+
+  return urls;
 }

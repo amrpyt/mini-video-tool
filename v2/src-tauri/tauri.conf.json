@@ -14,15 +14,19 @@
       {
         "label": "main",
         "title": "Mini Video Tool",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1000,
-        "minHeight": 700
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 720
       }
     ],
     "security": {
       "csp": null,
-      "capabilities": ["main-window"]
+      "capabilities": ["main-window"],
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPCACHE/mini-video-tool-v2/**"]
+      }
     }
   },
   "bundle": {
