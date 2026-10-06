@@ -74,6 +74,11 @@ export type EditorAction =
   | { type: "source/setStatus"; status: SourceStatus }
   | { type: "project/setSelection"; selection: TimeRange }
   | { type: "project/setQuality"; quality: DownloadQuality }
+  | { type: "silence/setAnalysis"; detectedRegions: TimeRange[] }
+  | { type: "silence/toggleAccepted"; region: TimeRange }
+  | { type: "silence/splitAccepted"; index: number; atUs: number }
+  | { type: "silence/mergeAccepted"; firstIndex: number; secondIndex: number }
+  | { type: "silence/disableRemoval" }
   | { type: "navigation/goTo"; step: EditorStep }
   | { type: "navigation/skip" }
   | { type: "playhead/set"; valueUs: number }
@@ -146,6 +151,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           downloadQuality: "best",
         },
         selection: { start: 0, end: action.metadata.duration },
+        silence: { detectedRegions: [], acceptedRemovedRegions: [] },
         export: {
           width: action.metadata.width,
           height: action.metadata.height,
@@ -168,6 +174,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           downloadQuality: "best",
         },
         selection: { start: 0, end: action.metadata.duration },
+        silence: { detectedRegions: [], acceptedRemovedRegions: [] },
       };
       return {
         ...withProject(state, project),
@@ -183,6 +190,66 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withProject(state, {
         ...state.project,
         source: { ...state.project.source, downloadQuality: action.quality },
+      });
+    case "silence/setAnalysis": {
+      const detectedRegions = action.detectedRegions.map((region) => ({ ...region }));
+      const acceptedRemovedRegions = action.detectedRegions.map((region) => ({ ...region }));
+      return withProject(state, {
+        ...state.project,
+        silence: { detectedRegions, acceptedRemovedRegions },
+      });
+    }
+    case "silence/toggleAccepted": {
+      const accepted = state.project.silence.acceptedRemovedRegions;
+      const covered = isRangeCovered(action.region, accepted);
+      const withoutOverlaps = accepted.filter(
+        (region) => region.end <= action.region.start || region.start >= action.region.end,
+      );
+      const acceptedRemovedRegions = covered
+        ? withoutOverlaps
+        : [...withoutOverlaps, { ...action.region }].sort((left, right) => left.start - right.start);
+      return withProject(state, {
+        ...state.project,
+        silence: { ...state.project.silence, acceptedRemovedRegions },
+      });
+    }
+    case "silence/splitAccepted": {
+      const accepted = state.project.silence.acceptedRemovedRegions;
+      const region = accepted[action.index];
+      if (!region || action.atUs <= region.start || action.atUs >= region.end) return state;
+      const acceptedRemovedRegions = [
+        ...accepted.slice(0, action.index),
+        { start: region.start, end: action.atUs },
+        { start: action.atUs, end: region.end },
+        ...accepted.slice(action.index + 1),
+      ];
+      return withProject(state, {
+        ...state.project,
+        silence: { ...state.project.silence, acceptedRemovedRegions },
+      });
+    }
+    case "silence/mergeAccepted": {
+      const accepted = state.project.silence.acceptedRemovedRegions;
+      const first = accepted[action.firstIndex];
+      const second = accepted[action.secondIndex];
+      if (!first || !second || action.firstIndex === action.secondIndex) return state;
+      const left = first.start <= second.start ? first : second;
+      const right = left === first ? second : first;
+      if (left.end < right.start) return state;
+      const remove = new Set([action.firstIndex, action.secondIndex]);
+      const acceptedRemovedRegions = accepted
+        .filter((_, index) => !remove.has(index))
+        .concat({ start: Math.min(first.start, second.start), end: Math.max(first.end, second.end) })
+        .sort((a, b) => a.start - b.start);
+      return withProject(state, {
+        ...state.project,
+        silence: { ...state.project.silence, acceptedRemovedRegions },
+      });
+    }
+    case "silence/disableRemoval":
+      return withProject(state, {
+        ...state.project,
+        silence: { ...state.project.silence, acceptedRemovedRegions: [] },
       });
     case "navigation/goTo":
       return { ...state, activeStep: action.step };
@@ -217,4 +284,21 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
   }
+}
+
+function sameRange(left: TimeRange, right: TimeRange): boolean {
+  return left.start === right.start && left.end === right.end;
+}
+
+export function isRangeCovered(target: TimeRange, ranges: TimeRange[]): boolean {
+  const relevant = ranges
+    .filter((range) => range.end > target.start && range.start < target.end)
+    .sort((left, right) => left.start - right.start);
+  let cursor = target.start;
+  for (const range of relevant) {
+    if (range.start > cursor) return false;
+    cursor = Math.max(cursor, range.end);
+    if (cursor >= target.end) return true;
+  }
+  return false;
 }

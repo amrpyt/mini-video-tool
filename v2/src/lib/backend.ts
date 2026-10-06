@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AnalyzeSilenceRequest,
   DownloadRangeRequest,
   FilmstripRequest,
   PreviewFrameRequest,
   ResolvedDownload,
+  SilenceAnalysis,
   SourceMetadata,
   YouTubeMetadata,
 } from "./types";
@@ -27,4 +29,8 @@ export function extractPreviewFrame(request: PreviewFrameRequest): Promise<strin
 
 export function extractFilmstrip(request: FilmstripRequest): Promise<string[]> {
   return invoke("extract_filmstrip", { request });
+}
+
+export function analyzeSilence(request: AnalyzeSilenceRequest): Promise<SilenceAnalysis> {
+  return invoke("analyze_silence", { request });
 }

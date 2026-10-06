@@ -19,6 +19,10 @@ interface TimelineProps {
   onPlayheadChange: (timeUs: number) => void;
   onSelectionChange: (selection: TimeRange) => void;
   filmstripFrames?: FilmstripFrame[];
+  waveformUrl?: string | null;
+  waveformRange?: TimeRange | null;
+  detectedRegions?: TimeRange[];
+  acceptedRegions?: TimeRange[];
 }
 
 export interface FilmstripFrame {
@@ -35,6 +39,10 @@ export function Timeline({
   onPlayheadChange,
   onSelectionChange,
   filmstripFrames = [],
+  waveformUrl = null,
+  waveformRange = null,
+  detectedRegions = [],
+  acceptedRegions = [],
 }: TimelineProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState<TimelineViewport>(() => fitViewport(durationUs, 1000));
@@ -79,6 +87,7 @@ export function Timeline({
       ),
     ),
   );
+  const waveformStyle = waveformUrl && waveformRange ? clippedRangeStyle(waveformRange, viewport) : null;
 
   function surfaceX(clientX: number): number {
     const rect = surfaceRef.current?.getBoundingClientRect();
@@ -230,10 +239,58 @@ export function Timeline({
                   ))}
                 </div>
               ) : null}
+              {lane === "Waveform" && waveformUrl && waveformStyle ? (
+                <img
+                  className="timeline-waveform-image"
+                  data-testid="timeline-waveform-image"
+                  src={waveformUrl}
+                  alt=""
+                  draggable={false}
+                  style={waveformStyle}
+                />
+              ) : null}
+              {lane === "Cuts" ? (
+                <div className="timeline-cut-regions">
+                  {detectedRegions.map((region) => {
+                    const style = clippedRangeStyle(region, viewport);
+                    return style ? (
+                      <span
+                        key={`detected-${region.start}-${region.end}`}
+                        className="timeline-cut-region timeline-cut-region-detected"
+                        data-testid="timeline-detected-region"
+                        style={style}
+                      />
+                    ) : null;
+                  })}
+                  {acceptedRegions.map((region) => {
+                    const style = clippedRangeStyle(region, viewport);
+                    return style ? (
+                      <span
+                        key={`accepted-${region.start}-${region.end}`}
+                        className="timeline-cut-region timeline-cut-region-accepted"
+                        data-testid="timeline-accepted-region"
+                        style={style}
+                      />
+                    ) : null;
+                  })}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
       </div>
     </div>
   );
+}
+
+function clippedRangeStyle(range: TimeRange, viewport: TimelineViewport) {
+  const startUs = Math.max(range.start, viewport.startUs);
+  const endUs = Math.min(range.end, viewport.endUs);
+  if (endUs <= startUs) return null;
+  const left = timeToX(startUs, viewport);
+  const right = timeToX(endUs, viewport);
+  return {
+    left: Math.round(left),
+    width: Math.max(1, Math.round(right - left)),
+  };
 }

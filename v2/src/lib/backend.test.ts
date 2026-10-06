@@ -4,13 +4,14 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  analyzeSilence,
   downloadRange,
   extractFilmstrip,
   extractPreviewFrame,
   getYouTubeMetadata,
   probeSource,
 } from "./backend";
-import type { DownloadRangeRequest } from "./types";
+import type { AnalyzeSilenceRequest, DownloadRangeRequest } from "./types";
 
 afterEach(() => clearMocks());
 
@@ -45,6 +46,16 @@ describe("typed backend IPC", () => {
       destinationDir: "C:\\cache\\filmstrip",
     });
 
+    const analysis: AnalyzeSilenceRequest = {
+      source: String.raw`C:\media\source.mp4`,
+      selection: { start: 1_000_000, end: 9_000_000 },
+      sourceOffset: 0,
+      localDuration: 10_000_000,
+      hasAudio: true,
+      waveformDestination: String.raw`C:\cache\wave.png`,
+    };
+    await analyzeSilence(analysis);
+
     expect(calls).toEqual([
       {
         command: "probe_source",
@@ -75,6 +86,10 @@ describe("typed backend IPC", () => {
             destinationDir: "C:\\cache\\filmstrip",
           },
         },
+      },
+      {
+        command: "analyze_silence",
+        payload: { request: analysis },
       },
     ]);
   });

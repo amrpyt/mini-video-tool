@@ -86,4 +86,33 @@ describe("Timeline", () => {
     fireEvent.pointerMove(startHandle, { pointerId: 2, clientX: 400 });
     expect(onSelectionChange).toHaveBeenLastCalledWith({ start: 40_000_000, end: 80_000_000 });
   });
+
+  it("renders waveform and detected/accepted cuts in source-time coordinates", () => {
+    render(
+      <Timeline
+        durationUs={100_000_000}
+        selection={{ start: 10_000_000, end: 90_000_000 }}
+        playheadUs={20_000_000}
+        onPlayheadChange={() => undefined}
+        onSelectionChange={() => undefined}
+        waveformUrl="asset://wave.png"
+        waveformRange={{ start: 10_000_000, end: 90_000_000 }}
+        detectedRegions={[{ start: 20_000_000, end: 30_000_000 }]}
+        acceptedRegions={[{ start: 22_000_000, end: 28_000_000 }]}
+      />,
+    );
+
+    expect(screen.getByTestId("timeline-waveform-image")).toHaveStyle({
+      left: "100px",
+      width: "800px",
+    });
+    expect(screen.getByTestId("timeline-detected-region")).toHaveStyle({
+      left: "200px",
+      width: "100px",
+    });
+    expect(screen.getByTestId("timeline-accepted-region")).toHaveStyle({
+      left: "220px",
+      width: "60px",
+    });
+  });
 });

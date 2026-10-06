@@ -16,6 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            commands::analysis::analyze_silence,
             commands::source::probe_source,
             commands::source::youtube_metadata,
             commands::source::download_range,

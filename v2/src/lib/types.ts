@@ -54,3 +54,17 @@ export interface FilmstripRequest {
   count: number;
   destinationDir: string;
 }
+
+export interface AnalyzeSilenceRequest {
+  source: string;
+  selection: TimeRange;
+  sourceOffset: MediaTime;
+  localDuration: MediaTime;
+  hasAudio: boolean;
+  waveformDestination: string;
+}
+
+export interface SilenceAnalysis {
+  detectedRegions: TimeRange[];
+  waveformImage: string | null;
+}

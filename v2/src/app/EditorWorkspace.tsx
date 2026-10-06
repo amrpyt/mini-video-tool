@@ -8,8 +8,10 @@ import { Stepper, STEP_LABELS } from "../components/Stepper";
 import { Timeline, type FilmstripFrame } from "../components/timeline/Timeline";
 import { RangeStep } from "../features/range/RangeStep";
 import { formatTimeInput, frameStepUs } from "../features/range/timeInput";
+import { SilenceStep } from "../features/silence/SilenceStep";
 import { SourceStep } from "../features/source/SourceStep";
-import { extractFilmstrip } from "../lib/backend";
+import { analyzeSilence, extractFilmstrip } from "../lib/backend";
+import type { SilenceAnalysis, TimeRange } from "../lib/types";
 import {
   EDITOR_STEPS,
   createInitialEditorState,
@@ -25,11 +27,38 @@ import {
 export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
   const filmstripFrames = useLocalFilmstrip(state.project.source);
+  const [waveform, setWaveform] = useState<{ url: string; range: TimeRange } | null>(null);
 
   useEditorShortcuts(state, dispatch);
 
   const selection = state.project.selection;
   const durationUs = sourceDurationUs(state.project);
+  const localSource = state.project.source.kind === "local" ? state.project.source : null;
+
+  useEffect(() => {
+    setWaveform(null);
+  }, [localSource?.path]);
+
+  async function runSilenceAnalysis(): Promise<SilenceAnalysis> {
+    if (!localSource || !selection) {
+      throw new Error("تحليل الصمت يحتاج ملفًا محليًا وتحديدًا صالحًا.");
+    }
+    const cacheRoot = await appCacheDir();
+    const waveformDestination = await join(
+      cacheRoot,
+      "mini-video-tool-v2",
+      "waveform",
+      `wave-${selection.start}-${selection.end}.png`,
+    );
+    return analyzeSilence({
+      source: localSource.path,
+      selection,
+      sourceOffset: 0,
+      localDuration: localSource.metadata.duration,
+      hasAudio: localSource.metadata.hasAudio,
+      waveformDestination,
+    });
+  }
 
   return (
     <div className="app-shell" dir="rtl">
@@ -83,7 +112,16 @@ export function EditorWorkspace() {
           title={`إعدادات ${STEP_LABELS[state.activeStep]}`}
           footer={<NavigationFooter state={state} dispatch={dispatch} />}
         >
-          {inspectorContent(state, dispatch)}
+          {inspectorContent(state, dispatch, {
+            runAnalysis: runSilenceAnalysis,
+            onWaveform: (path) => {
+              if (!path || !selection) {
+                setWaveform(null);
+                return;
+              }
+              setWaveform({ url: convertFileSrc(path), range: { ...selection } });
+            },
+          })}
         </Inspector>
       </main>
 
@@ -101,6 +139,10 @@ export function EditorWorkspace() {
           selection={selection}
           playheadUs={state.playheadUs}
           filmstripFrames={filmstripFrames}
+          waveformUrl={waveform?.url}
+          waveformRange={waveform?.range}
+          detectedRegions={state.project.silence.detectedRegions}
+          acceptedRegions={state.project.silence.acceptedRemovedRegions}
           onPlayheadChange={(valueUs) => dispatch({ type: "playhead/set", valueUs })}
           onSelectionChange={(nextSelection) =>
             dispatch({ type: "project/setSelection", selection: nextSelection })
@@ -157,7 +199,14 @@ function NavigationFooter({
   );
 }
 
-function inspectorContent(state: EditorState, dispatch: (action: EditorAction) => void) {
+function inspectorContent(
+  state: EditorState,
+  dispatch: (action: EditorAction) => void,
+  silenceRuntime: {
+    runAnalysis: () => Promise<SilenceAnalysis>;
+    onWaveform: (path: string | null) => void;
+  },
+) {
   switch (state.activeStep) {
     case "Source":
       return <SourceStep state={state} dispatch={dispatch} />;
@@ -176,7 +225,18 @@ function inspectorContent(state: EditorState, dispatch: (action: EditorAction) =
         />
       );
     case "Silence":
-      return <StepPlaceholder title="حذف الصمت" text="التحليل غير التدميري هيتضاف في الخطوة المخصصة له." />;
+      return (
+        <SilenceStep
+          sourcePath={state.project.source.kind === "local" ? state.project.source.path : null}
+          metadata={state.project.source.kind === "local" ? state.project.source.metadata : null}
+          selection={state.project.selection}
+          detectedRegions={state.project.silence.detectedRegions}
+          acceptedRegions={state.project.silence.acceptedRemovedRegions}
+          dispatch={dispatch}
+          runAnalysis={silenceRuntime.runAnalysis}
+          onWaveform={silenceRuntime.onWaveform}
+        />
+      );
     case "Design":
       return <StepPlaceholder title="التصميم" text="أدوات الصور والأشرطة هتتضاف بدون رندر وسيط." />;
     case "Captions":
