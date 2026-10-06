@@ -97,6 +97,159 @@ button:hover, .button-link:hover { background: #f4f4f5; }
 .preview video { width: 100%; max-height: 480px; border-radius: 10px; background: #000; }
 .waveform { width: 100%; height: 120px; object-fit: cover; border: 1px solid #e4e4e7; border-radius: 8px; background: #fff; }
 
+.editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 14px;
+  align-items: start;
+}
+
+.preview-column { min-width: 0; }
+.video-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #000;
+}
+.video-stage video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+}
+.logo-overlay {
+  position: absolute;
+  z-index: 5;
+  height: auto;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.35));
+}
+.logo-overlay.timeline-hidden { visibility: hidden; }
+.caption-preview {
+  position: absolute;
+  z-index: 6;
+  right: 7%;
+  left: 7%;
+  bottom: 7%;
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.25;
+  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 5px #000;
+  pointer-events: none;
+}
+.caption-preview[data-position="top"] { top: 7%; bottom: auto; }
+.caption-preview[data-position="middle"] { top: 50%; bottom: auto; transform: translateY(-50%); }
+
+.tools-panel {
+  display: grid;
+  gap: 10px;
+}
+.tool-block {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e4e4e7;
+  border-radius: 10px;
+  background: #fafafa;
+}
+.tool-block h3 { margin: 0; font-size: 14px; }
+.control-stack { display: grid; gap: 8px; }
+.control-stack label { display: grid; gap: 5px; color: #52525b; font-size: 12px; }
+.control-stack input[type="range"] { width: 100%; min-height: 28px; padding: 0; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.file-button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d4d4d8;
+  border-radius: 9px;
+  padding: 9px 14px;
+  background: #fff;
+  color: #18181b;
+  font-weight: 650;
+  cursor: pointer;
+}
+.file-button:hover { background: #f4f4f5; }
+
+.timeline-panel {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+.timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: #52525b;
+}
+.timeline {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  border: 1px solid #d4d4d8;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #fff;
+  direction: ltr;
+}
+.timeline-labels {
+  display: grid;
+  grid-template-rows: repeat(4, 30px);
+  border-right: 1px solid #e4e4e7;
+  background: #fafafa;
+}
+.timeline-labels span {
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid #e4e4e7;
+  color: #71717a;
+  font-size: 10px;
+}
+.timeline-labels span:last-child { border-bottom: 0; }
+.timeline-body {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(4, 30px);
+  cursor: pointer;
+  user-select: none;
+}
+.timeline-lane {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid #e4e4e7;
+  background: #fff;
+}
+.timeline-lane:last-of-type { border-bottom: 0; }
+.timeline-video-lane { background: linear-gradient(90deg, #f4f4f5, #e4e4e7); }
+.timeline-block {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  border-radius: 4px;
+  opacity: .85;
+}
+.timeline-block.cut { border: 1px dashed #f87171; background: #fee2e2; }
+.timeline-block.cut.active { border-style: solid; background: #fecaca; }
+.timeline-block.logo { border: 1px solid #8b5cf6; background: #ddd6fe; }
+.timeline-block.caption { border: 1px solid #3b82f6; background: #bfdbfe; }
+.timeline-playhead {
+  position: absolute;
+  z-index: 20;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #18181b;
+  pointer-events: none;
+}
+
 .silence-list { display: grid; gap: 8px; }
 .silence-item {
   display: flex; align-items: center; gap: 10px;
@@ -116,6 +269,6 @@ button:hover, .button-link:hover { background: #f4f4f5; }
   .range-grid { grid-template-columns: 1fr; }
   .video-info { grid-template-columns: 1fr; }
   .video-info img { width: 100%; }
+  .editor-grid { grid-template-columns: 1fr; }
+  .timeline { grid-template-columns: 52px minmax(0, 1fr); }
 }
-
-\n

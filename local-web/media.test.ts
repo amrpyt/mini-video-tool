@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { buildKeepSegments, formatSelector, formatTimestamp, parseSilenceDetect } from "./media";
+import {
+  buildKeepSegments,
+  formatSelector,
+  formatTimestamp,
+  parseSilenceDetect,
+  parseSrt,
+  remapCuesThroughCuts,
+} from "./media";
 
 describe("local web media helpers", () => {
   test("formats partial timestamps", () => {
@@ -30,6 +37,13 @@ describe("local web media helpers", () => {
       { start: 7, end: 10 },
     ]);
   });
-});
 
-\n
+  test("parses SRT and remaps captions around removed silence", () => {
+    const cues = parseSrt("1\n00:00:01,000 --> 00:00:05,000\nHello\n");
+    expect(cues).toEqual([{ start: 1, end: 5, text: "Hello" }]);
+    expect(remapCuesThroughCuts(cues, 6, [{ start: 2, end: 3 }])).toEqual([
+      { start: 1, end: 2, text: "Hello" },
+      { start: 2, end: 4, text: "Hello" },
+    ]);
+  });
+});

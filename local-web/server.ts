@@ -5,8 +5,11 @@ import {
   downloadRange,
   exportWithoutSilence,
   probeMedia,
+  readYouTubeCaptions,
   readYouTubeMetadata,
   resolveTools,
+  type CaptionCue,
+  type LogoOverlay,
   type Quality,
   type SilenceRegion,
 } from "./media";
@@ -23,14 +26,18 @@ const tools = await resolveTools(repoRoot);
 const sessions = new Map<string, {
   id: string;
   url: string;
+  sessionDir: string;
   sourcePath: string;
   waveformPath: string | null;
   sourceOffset: number;
   mediaDuration: number;
   selectionStart: number;
   selectionEnd: number;
+  width: number;
+  height: number;
   hasAudio: boolean;
   regions: SilenceRegion[];
+  logoPath?: string;
   outputPath?: string;
 }>();
 
@@ -151,12 +158,15 @@ const server = Bun.serve({
         sessions.set(id, {
           id,
           url: input.url,
+          sessionDir,
           sourcePath,
           waveformPath: analysis.waveformPath,
           sourceOffset,
           mediaDuration: probe.duration,
           selectionStart: start,
           selectionEnd: end,
+          width: probe.width,
+          height: probe.height,
           hasAudio: probe.hasAudio,
           regions: analysis.regions,
         });
@@ -172,8 +182,43 @@ const server = Bun.serve({
           waveformUrl: analysis.waveformPath ? `/waveform/${id}` : null,
         });
       }
+      if (url.pathname === "/api/logo" && req.method === "POST") {
+        const form = await req.formData();
+        const sessionId = String(form.get("sessionId") || "");
+        const session = safeSession(sessionId);
+        const file = form.get("file");
+        if (!(file instanceof File)) throw new Error("اختر ملف صورة صالح.");
+        if (file.size <= 0 || file.size > 20 * 1024 * 1024) throw new Error("حجم اللوجو يجب أن يكون أقل من 20MB.");
+        const allowed = new Map([
+          ["image/png", ".png"],
+          ["image/jpeg", ".jpg"],
+          ["image/webp", ".webp"],
+          ["image/bmp", ".bmp"],
+        ]);
+        const extension = allowed.get(file.type);
+        if (!extension) throw new Error("اللوجو يجب أن يكون PNG أو JPG أو WEBP أو BMP.");
+        const logoPath = path.join(session.sessionDir, `logo-${crypto.randomUUID()}${extension}`);
+        await Bun.write(logoPath, file);
+        session.logoPath = logoPath;
+        return json({ logoUrl: `/logo/${session.id}` });
+      }
+      if (url.pathname === "/api/youtube-captions" && req.method === "POST") {
+        const input = await body<{ sessionId: string }>(req);
+        const session = safeSession(input.sessionId);
+        const captionDir = path.join(session.sessionDir, "youtube-captions");
+        const cues = await readYouTubeCaptions(tools, session.url, captionDir);
+        return json({ cues });
+      }
       if (url.pathname === "/api/export" && req.method === "POST") {
-        const input = await body<{ sessionId: string; removedRegions: SilenceRegion[]; title?: string }>(req);
+        const input = await body<{
+          sessionId: string;
+          removedRegions: SilenceRegion[];
+          title?: string;
+          logo?: LogoOverlay | null;
+          captions?: CaptionCue[];
+          captionFontSize?: number;
+          captionPosition?: "top" | "middle" | "bottom";
+        }>(req);
         const session = safeSession(input.sessionId);
         const selectionDuration = session.selectionEnd - session.selectionStart;
         const selectionLocalStart = session.selectionStart - session.sourceOffset;
@@ -182,6 +227,18 @@ const server = Bun.serve({
           end: Number(region.end) - session.selectionStart,
         }));
         const outputPath = path.join(outputRoot, safeDownloadName(input.title));
+        const captions = (input.captions || []).map((cue) => ({
+          start: Number(cue.start) - session.selectionStart,
+          end: Number(cue.end) - session.selectionStart,
+          text: String(cue.text || ""),
+        }));
+        const logo = input.logo
+          ? {
+              ...input.logo,
+              start: Number(input.logo.start) - session.selectionStart,
+              end: Number(input.logo.end) - session.selectionStart,
+            }
+          : null;
         await exportWithoutSilence(
           tools,
           session.sourcePath,
@@ -189,7 +246,17 @@ const server = Bun.serve({
           selectionDuration,
           localRemoved,
           outputPath,
-          session.hasAudio,
+          {
+            hasAudio: session.hasAudio,
+            videoWidth: session.width,
+            videoHeight: session.height,
+            logoPath: logo ? session.logoPath || null : null,
+            logo,
+            captions,
+            captionFontSize: input.captionFontSize,
+            captionPosition: input.captionPosition,
+            workDir: session.sessionDir,
+          },
         );
         session.outputPath = outputPath;
         return json({ outputPath, downloadUrl: `/output/${session.id}` });
@@ -210,6 +277,11 @@ const server = Bun.serve({
         if (!session.waveformPath) return new Response("Not found", { status: 404 });
         return new Response(Bun.file(session.waveformPath), { headers: { "Content-Type": "image/png" } });
       }
+      if (url.pathname.startsWith("/logo/") && req.method === "GET") {
+        const session = safeSession(url.pathname.split("/").at(-1) || "");
+        if (!session.logoPath) return new Response("Not found", { status: 404 });
+        return serveLocalFile(req, session.logoPath, mimeFromPath(session.logoPath));
+      }
       if (url.pathname.startsWith("/output/") && req.method === "GET") {
         const session = safeSession(url.pathname.split("/").at(-1) || "");
         if (!session.outputPath) return new Response("Not found", { status: 404 });
@@ -223,6 +295,15 @@ const server = Bun.serve({
     }
   },
 });
+
+function mimeFromPath(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".png") return "image/png";
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".bmp") return "image/bmp";
+  return "application/octet-stream";
+}
 
 const appUrl = `http://${server.hostname}:${server.port}`;
 console.log(`Mini Video Tool Local Web: ${appUrl}`);

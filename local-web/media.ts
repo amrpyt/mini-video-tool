@@ -1,5 +1,5 @@
 import path from "node:path";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 
 export type Quality = "best" | "p1080" | "p720" | "p480" | "p360";
 
@@ -18,6 +18,21 @@ export interface YouTubeMetadata {
 }
 
 export interface SilenceRegion {
+  start: number;
+  end: number;
+}
+
+export interface CaptionCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface LogoOverlay {
+  x: number;
+  y: number;
+  width: number;
+  opacity: number;
   start: number;
   end: number;
 }
@@ -109,6 +124,65 @@ export function buildKeepSegments(duration: number, removed: SilenceRegion[]): S
   }
   if (cursor < duration) keep.push({ start: cursor, end: duration });
   return keep.filter((r) => r.end - r.start >= 0.01);
+}
+
+export function parseSrt(text: string): CaptionCue[] {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) return [];
+  const blocks = normalized.split(/\n{2,}/);
+  const cues: CaptionCue[] = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").map((line) => line.trimEnd());
+    const timeIndex = lines.findIndex((line) => line.includes("-->"));
+    if (timeIndex < 0) continue;
+    const [startText, endText] = lines[timeIndex].split("-->").map((value) => value.trim().split(/\s+/)[0]);
+    const start = parseSrtTime(startText);
+    const end = parseSrtTime(endText);
+    const cueText = lines.slice(timeIndex + 1).join("\n").trim();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start && cueText) {
+      cues.push({ start, end, text: cueText });
+    }
+  }
+  return cues;
+}
+
+export function remapCuesThroughCuts(cues: CaptionCue[], duration: number, removed: SilenceRegion[]): CaptionCue[] {
+  const keep = buildKeepSegments(duration, removed);
+  const result: CaptionCue[] = [];
+  let outputCursor = 0;
+  for (const segment of keep) {
+    const segmentDuration = segment.end - segment.start;
+    for (const cue of cues) {
+      const start = Math.max(cue.start, segment.start);
+      const end = Math.min(cue.end, segment.end);
+      if (end <= start) continue;
+      result.push({
+        start: outputCursor + (start - segment.start),
+        end: outputCursor + (end - segment.start),
+        text: cue.text,
+      });
+    }
+    outputCursor += segmentDuration;
+  }
+  return result;
+}
+
+export function remapRangeThroughCuts(range: SilenceRegion, duration: number, removed: SilenceRegion[]): SilenceRegion[] {
+  const keep = buildKeepSegments(duration, removed);
+  const result: SilenceRegion[] = [];
+  let outputCursor = 0;
+  for (const segment of keep) {
+    const start = Math.max(range.start, segment.start);
+    const end = Math.min(range.end, segment.end);
+    if (end > start) {
+      result.push({
+        start: outputCursor + (start - segment.start),
+        end: outputCursor + (end - segment.start),
+      });
+    }
+    outputCursor += segment.end - segment.start;
+  }
+  return result;
 }
 
 export async function runProcess(command: string, args: string[], timeoutMs = 15 * 60_000): Promise<RunResult> {
@@ -204,6 +278,32 @@ export async function readYouTubeMetadata(tools: ToolPaths, rawUrl: string): Pro
   };
 }
 
+export async function readYouTubeCaptions(tools: ToolPaths, rawUrl: string, outputDir: string): Promise<CaptionCue[]> {
+  const url = validateYouTubeUrl(rawUrl);
+  await mkdir(outputDir, { recursive: true });
+  const template = path.join(outputDir, "captions.%(language)s.%(ext)s");
+  const result = await runProcess(tools.ytDlp, [
+    "--ffmpeg-location", path.dirname(tools.ffmpeg),
+    "--no-playlist",
+    "--skip-download",
+    "--write-subs",
+    "--write-auto-subs",
+    "--sub-langs", "ar.*,ar",
+    "--sub-format", "srt",
+    "--convert-subs", "srt",
+    "-o", template,
+    url,
+  ], 2 * 60_000);
+  if (result.code !== 0) throw new Error(lastDiagnostic(result.stderr, "تعذر تحميل كابشن يوتيوب."));
+  const files = (await readdir(outputDir)).filter((name) => name.startsWith("captions.") && name.toLowerCase().endsWith(".srt"));
+  if (files.length === 0) throw new Error("لا يوجد كابشن عربي متاح لهذا الفيديو.");
+  const preferred = files.sort((a, b) => captionLanguageRank(a) - captionLanguageRank(b))[0];
+  const text = await Bun.file(path.join(outputDir, preferred)).text();
+  const cues = parseSrt(text);
+  if (cues.length === 0) throw new Error("ملف الكابشن من يوتيوب فارغ أو غير صالح.");
+  return cues;
+}
+
 export async function downloadRange(
   tools: ToolPaths,
   url: string,
@@ -295,13 +395,34 @@ export async function exportWithoutSilence(
   selectionDuration: number,
   removedSelectionLocal: SilenceRegion[],
   output: string,
-  hasAudio = true,
+  options: {
+    hasAudio?: boolean;
+    videoWidth?: number;
+    videoHeight?: number;
+    logoPath?: string | null;
+    logo?: LogoOverlay | null;
+    captions?: CaptionCue[];
+    captionFontSize?: number;
+    captionPosition?: "top" | "middle" | "bottom";
+    workDir?: string;
+  } = {},
 ): Promise<void> {
+  const hasAudio = options.hasAudio ?? true;
   const keep = buildKeepSegments(selectionDuration, removedSelectionLocal);
   if (keep.length === 0) throw new Error("إزالة الصمت ستحذف الفيديو كله.");
   await mkdir(path.dirname(output), { recursive: true });
 
-  if (removedSelectionLocal.length === 0) {
+  const logo = options.logoPath && options.logo ? normalizeLogo(options.logo, selectionDuration) : null;
+  const captions = (options.captions || [])
+    .map((cue) => ({
+      start: Math.max(0, cue.start),
+      end: Math.min(selectionDuration, cue.end),
+      text: cue.text,
+    }))
+    .filter((cue) => cue.end > cue.start && cue.text.trim());
+  const hasVisualEffects = Boolean(logo || captions.length > 0);
+
+  if (removedSelectionLocal.length === 0 && !hasVisualEffects) {
     const copy = await runProcess(tools.ffmpeg, [
       "-y", "-hide_banner",
       "-ss", selectionLocalStart.toFixed(6),
@@ -326,20 +447,97 @@ export async function exportWithoutSilence(
       concatInputs.push(`[a${index}]`);
     }
   });
-  if (hasAudio) {
-    filters.push(`${concatInputs.join("")}concat=n=${keep.length}:v=1:a=1[outv][outa]`);
-  } else {
-    filters.push(`${concatInputs.join("")}concat=n=${keep.length}:v=1:a=0[outv]`);
+  if (hasAudio) filters.push(`${concatInputs.join("")}concat=n=${keep.length}:v=1:a=1[basev][outa]`);
+  else filters.push(`${concatInputs.join("")}concat=n=${keep.length}:v=1:a=0[basev]`);
+
+  const args = ["-y", "-hide_banner", "-i", source];
+  let videoLabel = "basev";
+  if (logo && options.logoPath) {
+    args.push("-loop", "1", "-framerate", "1", "-i", options.logoPath);
+    const width = Math.max(24, Math.round((options.videoWidth || 1280) * logo.width));
+    filters.push(`[1:v]scale=${width}:-1,format=rgba,colorchannelmixer=aa=${logo.opacity.toFixed(3)}[logo]`);
+    const outputRanges = remapRangeThroughCuts({ start: logo.start, end: logo.end }, selectionDuration, removedSelectionLocal);
+    const enable = outputRanges.length
+      ? outputRanges.map((range) => `between(t,${range.start.toFixed(3)},${range.end.toFixed(3)})`).join("+")
+      : "0";
+    const x = Math.round((options.videoWidth || 1280) * logo.x);
+    const y = Math.round((options.videoHeight || 720) * logo.y);
+    filters.push(`[${videoLabel}][logo]overlay=x=${x}:y=${y}:enable='${enable}':shortest=1[vlogo]`);
+    videoLabel = "vlogo";
   }
 
-  const args = ["-y", "-hide_banner", "-i", source, "-filter_complex", filters.join(";")];
-  args.push("-map", "[outv]");
+  if (captions.length > 0) {
+    const remapped = remapCuesThroughCuts(captions, selectionDuration, removedSelectionLocal);
+    if (remapped.length > 0) {
+      const workDir = options.workDir || path.dirname(output);
+      await mkdir(workDir, { recursive: true });
+      const subtitlePath = path.join(workDir, `captions-${crypto.randomUUID()}.srt`);
+      await writeFile(subtitlePath, cuesToSrt(remapped), "utf8");
+      const escaped = escapeFilterPath(subtitlePath);
+      const fontSize = Math.max(12, Math.min(96, Math.round(options.captionFontSize || 42)));
+      const alignment = options.captionPosition === "top" ? 8 : options.captionPosition === "middle" ? 5 : 2;
+      filters.push(`[${videoLabel}]subtitles='${escaped}':force_style='FontSize=${fontSize},Alignment=${alignment},Outline=2,Shadow=1'[vcap]`);
+      videoLabel = "vcap";
+    }
+  }
+
+  if (videoLabel === "basev") filters.push("[basev]null[vout]");
+  else filters.push(`[${videoLabel}]null[vout]`);
+
+  args.push("-filter_complex", filters.join(";"));
+  args.push("-map", "[vout]");
   if (hasAudio) args.push("-map", "[outa]");
   args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "20");
   if (hasAudio) args.push("-c:a", "aac", "-b:a", "192k");
   args.push("-movflags", "+faststart", output);
   const result = await runProcess(tools.ffmpeg, args, 30 * 60_000);
   if (result.code !== 0) throw new Error(lastDiagnostic(result.stderr, "تعذر تصدير الفيديو."));
+}
+
+function parseSrtTime(value: string): number {
+  const match = value.match(/^(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4].padEnd(3, "0")) / 1000;
+}
+
+function formatSrtTime(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const h = Math.floor(safe / 3600);
+  const m = Math.floor((safe % 3600) / 60);
+  const s = Math.floor(safe % 60);
+  const ms = Math.round((safe - Math.floor(safe)) * 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+}
+
+function cuesToSrt(cues: CaptionCue[]): string {
+  return cues.map((cue, index) => `${index + 1}\n${formatSrtTime(cue.start)} --> ${formatSrtTime(cue.end)}\n${cue.text.replace(/\r/g, "")}\n`).join("\n");
+}
+
+function escapeFilterPath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+}
+
+function normalizeLogo(logo: LogoOverlay, duration: number): LogoOverlay {
+  const width = Math.max(0.03, Math.min(0.8, Number(logo.width) || 0.18));
+  const x = Math.max(0, Math.min(1 - width, Number(logo.x) || 0));
+  const y = Math.max(0, Math.min(0.95, Number(logo.y) || 0));
+  const opacityValue = Number(logo.opacity);
+  const startValue = Number(logo.start);
+  const endValue = Number(logo.end);
+  return {
+    x,
+    y,
+    width,
+    opacity: Math.max(0, Math.min(1, Number.isFinite(opacityValue) ? opacityValue : 1)),
+    start: Math.max(0, Math.min(duration, Number.isFinite(startValue) ? startValue : 0)),
+    end: Math.max(0, Math.min(duration, Number.isFinite(endValue) ? endValue : duration)),
+  };
+}
+
+function captionLanguageRank(name: string): number {
+  if (/\.ar\.srt$/i.test(name)) return 0;
+  if (/\.ar[-_.]/i.test(name)) return 1;
+  return 10;
 }
 
 function lastDiagnostic(stderr: string, fallback: string): string {

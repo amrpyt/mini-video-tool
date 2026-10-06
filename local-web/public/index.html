@@ -55,15 +55,86 @@
         <button id="analyze-btn" class="primary wide">تحميل الجزء وتحليل الصمت</button>
         <p id="analysis-status" class="hint"></p>
         <p id="analysis-error" class="error hidden"></p>
-        <div id="preview-wrap" class="preview hidden">
-          <video id="preview" controls></video>
-          <img id="waveform" class="waveform hidden" alt="الموجة الصوتية" />
-        </div>
+        <img id="waveform" class="waveform hidden" alt="الموجة الصوتية" />
         <div id="silence-list" class="silence-list"></div>
       </section>
 
+      <section class="card disabled" id="editor-card">
+        <div class="step-title"><span>4</span><h2>عدّل</h2></div>
+        <div class="editor-grid">
+          <div class="preview-column">
+            <div id="video-stage" class="video-stage">
+              <video id="preview" controls></video>
+              <img id="logo-overlay" class="logo-overlay hidden" alt="اللوجو" draggable="false" />
+              <div id="caption-preview" class="caption-preview hidden"></div>
+            </div>
+          </div>
+
+          <aside class="tools-panel">
+            <div class="tool-block">
+              <h3>اللوجو</h3>
+              <label class="file-button">اختيار لوجو
+                <input id="logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden />
+              </label>
+              <div id="logo-controls" class="control-stack hidden">
+                <label>الحجم <input id="logo-size" type="range" min="5" max="60" value="18" /></label>
+                <label>الشفافية <input id="logo-opacity" type="range" min="0" max="100" value="100" /></label>
+                <div class="two-col">
+                  <label>من <input id="logo-start" type="number" min="0" step="0.1" /></label>
+                  <label>إلى <input id="logo-end" type="number" min="0" step="0.1" /></label>
+                </div>
+                <button id="remove-logo-btn" type="button">إزالة اللوجو</button>
+              </div>
+              <p class="hint">اسحب اللوجو فوق الفيديو لمكانه.</p>
+            </div>
+
+            <div class="tool-block">
+              <h3>الكابشن</h3>
+              <div class="control-stack">
+                <button id="youtube-captions-btn" type="button">كابشن يوتيوب العربي</button>
+                <label class="file-button">استيراد SRT
+                  <input id="caption-file" type="file" accept=".srt,text/plain" hidden />
+                </label>
+                <label>الحجم <input id="caption-size" type="range" min="18" max="72" value="42" /></label>
+                <label>المكان
+                  <select id="caption-position">
+                    <option value="bottom">تحت</option>
+                    <option value="middle">النص</option>
+                    <option value="top">فوق</option>
+                  </select>
+                </label>
+                <button id="clear-captions-btn" type="button">مسح الكابشن</button>
+                <span id="caption-count" class="hint">0 كابشن</span>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="timeline-panel" id="timeline-panel">
+          <div class="timeline-head">
+            <strong>التايم لاين</strong>
+            <span id="timeline-time" dir="ltr">00:00.0 / 00:00.0</span>
+          </div>
+          <div id="timeline" class="timeline" aria-label="التايم لاين">
+            <div class="timeline-labels">
+              <span>فيديو</span>
+              <span>صمت</span>
+              <span>لوجو</span>
+              <span>كابشن</span>
+            </div>
+            <div id="timeline-body" class="timeline-body">
+              <div class="timeline-lane timeline-video-lane"></div>
+              <div id="timeline-silence" class="timeline-lane"></div>
+              <div id="timeline-logo" class="timeline-lane"></div>
+              <div id="timeline-captions" class="timeline-lane"></div>
+              <div id="timeline-playhead" class="timeline-playhead"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="card disabled" id="export-card">
-        <div class="step-title"><span>4</span><h2>صدّر</h2></div>
+        <div class="step-title"><span>5</span><h2>صدّر</h2></div>
         <p class="hint">شيل العلامة من أي منطقة صمت عايز تحتفظ بيها.</p>
         <button id="export-btn" class="primary wide">تصدير الفيديو</button>
         <p id="export-status" class="hint"></p>
@@ -81,5 +152,3 @@
     <script src="/app.js" defer></script>
   </body>
 </html>
-
-\n
