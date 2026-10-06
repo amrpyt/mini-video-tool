@@ -1,10 +1,16 @@
 import type {
+  CaptionStyle,
+  CaptionTrack,
   DownloadQuality,
+  EditorOverlay,
   FrameRate,
+  NormalizedGeometry,
   SourceMetadata,
   TimeRange,
   YouTubeMetadata,
 } from "../lib/types";
+
+export type { CaptionTrack, EditorOverlay } from "../lib/types";
 
 export const EDITOR_STEPS = [
   "Source",
@@ -40,12 +46,8 @@ export interface EditorProject {
     detectedRegions: TimeRange[];
     acceptedRemovedRegions: TimeRange[];
   };
-  overlays: unknown[];
-  captions: {
-    enabled: boolean;
-    cues: unknown[];
-    style: Record<string, never>;
-  };
+  overlays: EditorOverlay[];
+  captions: CaptionTrack;
   export: {
     width: number;
     height: number;
@@ -79,6 +81,14 @@ export type EditorAction =
   | { type: "silence/splitAccepted"; index: number; atUs: number }
   | { type: "silence/mergeAccepted"; firstIndex: number; secondIndex: number }
   | { type: "silence/disableRemoval" }
+  | { type: "overlay/add"; overlay: EditorOverlay }
+  | { type: "overlay/remove"; id: string }
+  | { type: "overlay/updateGeometry"; id: string; geometry: NormalizedGeometry }
+  | { type: "overlay/updateOpacity"; id: string; opacity: number }
+  | { type: "overlay/setAspectLock"; id: string; locked: boolean }
+  | { type: "captions/setTrack"; track: CaptionTrack }
+  | { type: "captions/setEnabled"; enabled: boolean }
+  | { type: "captions/updateStyle"; patch: Partial<CaptionStyle> }
   | { type: "navigation/goTo"; step: EditorStep }
   | { type: "navigation/skip" }
   | { type: "playhead/set"; valueUs: number }
@@ -88,6 +98,34 @@ export type EditorAction =
 const HISTORY_LIMIT = 100;
 const DEFAULT_FRAME_RATE: FrameRate = { numerator: 30_000, denominator: 1_001 };
 
+export function createDefaultCaptionStyle(): CaptionStyle {
+  return {
+    sizePercent: 4.5,
+    textColor: "#ffffff",
+    outlineColor: "#000000",
+    outlineWidth: 1.2,
+    shadow: 2,
+    shadowColor: "#000000",
+    backgroundEnabled: false,
+    backgroundColor: "#000000",
+    backgroundOpacity: 55,
+    verticalPosition: "bottom",
+    horizontalPosition: "center",
+    marginPercent: 7,
+    bold: false,
+    italic: false,
+    fontPath: null,
+  };
+}
+
+function createEmptyCaptionTrack(): CaptionTrack {
+  return {
+    enabled: false,
+    cues: [],
+    style: createDefaultCaptionStyle(),
+  };
+}
+
 function createInitialProject(): EditorProject {
   return {
     schemaVersion: 1,
@@ -95,7 +133,7 @@ function createInitialProject(): EditorProject {
     selection: null,
     silence: { detectedRegions: [], acceptedRemovedRegions: [] },
     overlays: [],
-    captions: { enabled: false, cues: [], style: {} },
+    captions: createEmptyCaptionTrack(),
     export: { width: 1920, height: 1080, frameRate: DEFAULT_FRAME_RATE },
   };
 }
@@ -152,6 +190,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         },
         selection: { start: 0, end: action.metadata.duration },
         silence: { detectedRegions: [], acceptedRemovedRegions: [] },
+        overlays: [],
+        captions: createEmptyCaptionTrack(),
         export: {
           width: action.metadata.width,
           height: action.metadata.height,
@@ -175,6 +215,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         },
         selection: { start: 0, end: action.metadata.duration },
         silence: { detectedRegions: [], acceptedRemovedRegions: [] },
+        overlays: [],
+        captions: createEmptyCaptionTrack(),
       };
       return {
         ...withProject(state, project),
@@ -250,6 +292,61 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withProject(state, {
         ...state.project,
         silence: { ...state.project.silence, acceptedRemovedRegions: [] },
+      });
+    case "overlay/add":
+      return withProject(state, {
+        ...state.project,
+        overlays: [...state.project.overlays, action.overlay],
+      });
+    case "overlay/remove":
+      return withProject(state, {
+        ...state.project,
+        overlays: state.project.overlays.filter((overlay) => overlay.id !== action.id),
+      });
+    case "overlay/updateGeometry":
+      return withProject(state, {
+        ...state.project,
+        overlays: state.project.overlays.map((overlay) =>
+          overlay.id === action.id ? { ...overlay, geometry: action.geometry } : overlay,
+        ),
+      });
+    case "overlay/updateOpacity":
+      return withProject(state, {
+        ...state.project,
+        overlays: state.project.overlays.map((overlay) =>
+          overlay.id === action.id
+            ? { ...overlay, opacity: Math.max(0, Math.min(1, action.opacity)) }
+            : overlay,
+        ),
+      });
+    case "overlay/setAspectLock":
+      return withProject(state, {
+        ...state.project,
+        overlays: state.project.overlays.map((overlay) =>
+          overlay.id === action.id ? { ...overlay, aspectLocked: action.locked } : overlay,
+        ),
+      });
+    case "captions/setTrack":
+      return withProject(state, {
+        ...state.project,
+        captions: {
+          ...action.track,
+          cues: action.track.cues.map((cue) => ({ ...cue })),
+          style: { ...action.track.style },
+        },
+      });
+    case "captions/setEnabled":
+      return withProject(state, {
+        ...state.project,
+        captions: { ...state.project.captions, enabled: action.enabled },
+      });
+    case "captions/updateStyle":
+      return withProject(state, {
+        ...state.project,
+        captions: {
+          ...state.project.captions,
+          style: { ...state.project.captions.style, ...action.patch },
+        },
       });
     case "navigation/goTo":
       return { ...state, activeStep: action.step };

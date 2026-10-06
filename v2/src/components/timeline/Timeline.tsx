@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent } from "react";
 
-import type { TimeRange } from "../../lib/types";
+import type { CaptionCue, EditorOverlay, TimeRange } from "../../lib/types";
 import {
   clampScrubTime,
   fitViewport,
@@ -23,6 +23,8 @@ interface TimelineProps {
   waveformRange?: TimeRange | null;
   detectedRegions?: TimeRange[];
   acceptedRegions?: TimeRange[];
+  overlays?: EditorOverlay[];
+  captionCues?: CaptionCue[];
 }
 
 export interface FilmstripFrame {
@@ -43,6 +45,8 @@ export function Timeline({
   waveformRange = null,
   detectedRegions = [],
   acceptedRegions = [],
+  overlays = [],
+  captionCues = [],
 }: TimelineProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const scrubPointerRef = useRef<number | null>(null);
@@ -290,6 +294,41 @@ export function Timeline({
                         key={`accepted-${region.start}-${region.end}`}
                         className="timeline-cut-region timeline-cut-region-accepted"
                         data-testid="timeline-accepted-region"
+                        style={style}
+                      />
+                    ) : null;
+                  })}
+                </div>
+              ) : null}
+              {lane === "Captions" ? (
+                <div className="timeline-caption-regions">
+                  {captionCues.map((cue, index) => {
+                    const style = clippedRangeStyle({ start: cue.start, end: cue.end }, viewport);
+                    return style ? (
+                      <button
+                        key={`caption-${cue.start}-${cue.end}-${index}`}
+                        type="button"
+                        className="timeline-caption-region"
+                        data-testid="timeline-caption-region"
+                        title={cue.text}
+                        style={style}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={() => onPlayheadChange(cue.start)}
+                      />
+                    ) : null;
+                  })}
+                </div>
+              ) : null}
+              {lane === "Overlays" ? (
+                <div className="timeline-overlay-regions">
+                  {overlays.map((overlay) => {
+                    const style = clippedRangeStyle(overlay.range, viewport);
+                    return style ? (
+                      <span
+                        key={overlay.id}
+                        className="timeline-overlay-region"
+                        data-testid="timeline-overlay-region"
+                        data-overlay-id={overlay.id}
                         style={style}
                       />
                     ) : null;

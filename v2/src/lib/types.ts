@@ -68,3 +68,52 @@ export interface SilenceAnalysis {
   detectedRegions: TimeRange[];
   waveformImage: string | null;
 }
+
+export interface NormalizedGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type OverlayKind = "image" | "blackBar";
+
+export interface EditorOverlay {
+  id: string;
+  kind: OverlayKind;
+  range: TimeRange;
+  geometry: NormalizedGeometry;
+  opacity: number;
+  assetPath: string | null;
+  aspectLocked: boolean;
+}
+
+export interface CaptionCue {
+  start: MediaTime;
+  end: MediaTime;
+  text: string;
+}
+
+export interface CaptionStyle {
+  sizePercent: number;
+  textColor: string;
+  outlineColor: string;
+  outlineWidth: number;
+  shadow: number;
+  shadowColor: string;
+  backgroundEnabled: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  verticalPosition: "top" | "middle" | "bottom";
+  horizontalPosition: "left" | "center" | "right";
+  marginPercent: number;
+  bold: boolean;
+  italic: boolean;
+  fontPath: string | null;
+}
+
+export interface CaptionTrack {
+  enabled: boolean;
+  cues: CaptionCue[];
+  style: CaptionStyle;
+}

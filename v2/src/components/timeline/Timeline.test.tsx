@@ -123,4 +123,39 @@ describe("Timeline", () => {
       width: "60px",
     });
   });
+
+  it("renders overlay and caption spans in source-time coordinates", () => {
+    render(
+      <Timeline
+        durationUs={100_000_000}
+        selection={{ start: 0, end: 100_000_000 }}
+        playheadUs={20_000_000}
+        onPlayheadChange={() => undefined}
+        onSelectionChange={() => undefined}
+        overlays={[
+          {
+            id: "logo",
+            kind: "image",
+            range: { start: 20_000_000, end: 40_000_000 },
+            geometry: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+            opacity: 1,
+            assetPath: "C:\\logo.png",
+            aspectLocked: true,
+          },
+        ]}
+        captionCues={[
+          { start: 50_000_000, end: 60_000_000, text: "caption" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("timeline-overlay-region")).toHaveStyle({
+      left: "200px",
+      width: "200px",
+    });
+    expect(screen.getByTestId("timeline-caption-region")).toHaveStyle({
+      left: "500px",
+      width: "100px",
+    });
+  });
 });

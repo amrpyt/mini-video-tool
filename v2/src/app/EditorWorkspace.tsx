@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appCacheDir, join } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useReducer, useState } from "react";
 
 import { Inspector } from "../components/Inspector";
@@ -7,11 +8,18 @@ import { Preview } from "../components/Preview";
 import { Stepper, STEP_LABELS } from "../components/Stepper";
 import { Timeline, type FilmstripFrame } from "../components/timeline/Timeline";
 import { RangeStep } from "../features/range/RangeStep";
+import { CaptionsStep } from "../features/captions/CaptionsStep";
+import { DesignStep } from "../features/design/DesignStep";
 import { formatTimeInput, frameStepUs } from "../features/range/timeInput";
 import { SilenceStep } from "../features/silence/SilenceStep";
 import { SourceStep } from "../features/source/SourceStep";
-import { analyzeSilence, extractFilmstrip } from "../lib/backend";
-import type { SilenceAnalysis, TimeRange } from "../lib/types";
+import {
+  analyzeSilence,
+  extractFilmstrip,
+  getYouTubeCaptions,
+  importCaptions,
+} from "../lib/backend";
+import type { CaptionTrack, SilenceAnalysis, TimeRange } from "../lib/types";
 import {
   EDITOR_STEPS,
   createInitialEditorState,
@@ -28,6 +36,7 @@ export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
   const filmstripFrames = useLocalFilmstrip(state.project.source);
   const [waveform, setWaveform] = useState<{ url: string; range: TimeRange } | null>(null);
+  const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
 
   useEditorShortcuts(state, dispatch);
 
@@ -42,6 +51,17 @@ export function EditorWorkspace() {
   useEffect(() => {
     setWaveform(null);
   }, [silenceAnalysisIdentity]);
+
+  const sourceIdentity =
+    state.project.source.kind === "local"
+      ? `local:${state.project.source.path}`
+      : state.project.source.kind === "youtube"
+        ? `youtube:${state.project.source.url}`
+        : "none";
+
+  useEffect(() => {
+    setSelectedOverlayId(null);
+  }, [sourceIdentity]);
 
   async function runSilenceAnalysis(): Promise<SilenceAnalysis> {
     if (!localSource || !selection) {
@@ -108,7 +128,17 @@ export function EditorWorkspace() {
             </span>
           </div>
           <div className="preview-stage">
-            <Preview source={state.project.source} playheadUs={state.playheadUs} />
+            <Preview
+              source={state.project.source}
+              playheadUs={state.playheadUs}
+              overlays={state.project.overlays}
+              captionTrack={state.project.captions}
+              selectedOverlayId={selectedOverlayId}
+              onSelectOverlay={setSelectedOverlayId}
+              onOverlayGeometryChange={(id, geometry) =>
+                dispatch({ type: "overlay/updateGeometry", id, geometry })
+              }
+            />
           </div>
         </section>
 
@@ -125,6 +155,15 @@ export function EditorWorkspace() {
               }
               setWaveform({ url: convertFileSrc(path), range: { ...selection } });
             },
+            selectedOverlayId,
+            onSelectOverlay: setSelectedOverlayId,
+            chooseImage: chooseImageFile,
+            importCaptions: importCaptionFile,
+            loadYouTubeCaptions: async () => {
+              if (state.project.source.kind !== "youtube") return null;
+              return getYouTubeCaptions(state.project.source.url);
+            },
+            chooseFont: chooseFontFile,
           })}
         </Inspector>
       </main>
@@ -147,6 +186,8 @@ export function EditorWorkspace() {
           waveformRange={waveform?.range}
           detectedRegions={state.project.silence.detectedRegions}
           acceptedRegions={state.project.silence.acceptedRemovedRegions}
+          overlays={state.project.overlays}
+          captionCues={state.project.captions.enabled ? state.project.captions.cues : []}
           onPlayheadChange={(valueUs) => dispatch({ type: "playhead/set", valueUs })}
           onSelectionChange={(nextSelection) =>
             dispatch({ type: "project/setSelection", selection: nextSelection })
@@ -209,6 +250,12 @@ function inspectorContent(
   silenceRuntime: {
     runAnalysis: () => Promise<SilenceAnalysis>;
     onWaveform: (path: string | null) => void;
+    selectedOverlayId: string | null;
+    onSelectOverlay: (id: string | null) => void;
+    chooseImage: () => Promise<string | null>;
+    importCaptions: () => Promise<CaptionTrack | null>;
+    loadYouTubeCaptions: () => Promise<CaptionTrack | null>;
+    chooseFont: () => Promise<string | null>;
   },
 ) {
   switch (state.activeStep) {
@@ -247,10 +294,61 @@ function inspectorContent(
         />
       );
     case "Design":
-      return <StepPlaceholder title="التصميم" text="أدوات الصور والأشرطة هتتضاف بدون رندر وسيط." />;
+      return (
+        <DesignStep
+          selection={state.project.selection}
+          overlays={state.project.overlays}
+          selectedOverlayId={silenceRuntime.selectedOverlayId}
+          onSelectOverlay={silenceRuntime.onSelectOverlay}
+          dispatch={dispatch}
+          chooseImage={silenceRuntime.chooseImage}
+          canvasAspectRatio={
+            state.project.export.height > 0
+              ? state.project.export.width / state.project.export.height
+              : 16 / 9
+          }
+        />
+      );
     case "Captions":
-      return <StepPlaceholder title="الكابشن" text="استيراد وتحرير الكابشن هيتضاف مع المعاينة الحية." />;
+      return (
+        <CaptionsStep
+          track={state.project.captions}
+          sourceKind={state.project.source.kind}
+          dispatch={dispatch}
+          onSeek={(timeUs) => dispatch({ type: "playhead/set", valueUs: timeUs })}
+          importCaptions={silenceRuntime.importCaptions}
+          loadYouTubeCaptions={silenceRuntime.loadYouTubeCaptions}
+          chooseFont={silenceRuntime.chooseFont}
+        />
+      );
   }
+}
+
+async function chooseImageFile(): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+async function importCaptionFile(): Promise<CaptionTrack | null> {
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Captions", extensions: ["srt", "ass", "ssa"] }],
+  });
+  return typeof selected === "string" ? importCaptions(selected) : null;
+}
+
+async function chooseFontFile(): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Font", extensions: ["ttf", "otf", "ttc"] }],
+  });
+  return typeof selected === "string" ? selected : null;
 }
 
 function StepPlaceholder({ title, text, warning = false }: { title: string; text: string; warning?: boolean }) {

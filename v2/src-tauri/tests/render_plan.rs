@@ -125,6 +125,7 @@ fn caption_source_time_maps_to_output_time_after_cut() {
 fn overlay_crossing_removed_boundary_is_split_into_valid_output_spans() {
     let overlay = Overlay {
         id: "logo".into(),
+        kind: Default::default(),
         range: range(14, 18),
         geometry: NormalizedRect {
             x: 0.1,
@@ -132,6 +133,9 @@ fn overlay_crossing_removed_boundary_is_split_into_valid_output_spans() {
             width: 0.2,
             height: 0.2,
         },
+        opacity: 1.0,
+        asset_path: None,
+        aspect_locked: false,
     };
 
     let plan = compile_render_plan(
@@ -167,6 +171,7 @@ fn edits_completely_outside_selection_do_not_enter_plan() {
     };
     let overlay = Overlay {
         id: "outside".into(),
+        kind: Default::default(),
         range: range(1, 5),
         geometry: NormalizedRect {
             x: 0.0,
@@ -174,6 +179,9 @@ fn edits_completely_outside_selection_do_not_enter_plan() {
             width: 0.5,
             height: 0.5,
         },
+        opacity: 1.0,
+        asset_path: None,
+        aspect_locked: false,
     };
 
     let plan = compile_render_plan(
@@ -197,6 +205,7 @@ fn source_offset_preroll_does_not_change_source_time_decisions() {
     };
     let overlay = Overlay {
         id: "logo".into(),
+        kind: Default::default(),
         range: range(14, 18),
         geometry: NormalizedRect {
             x: 0.1,
@@ -204,6 +213,9 @@ fn source_offset_preroll_does_not_change_source_time_decisions() {
             width: 0.2,
             height: 0.2,
         },
+        opacity: 1.0,
+        asset_path: None,
+        aspect_locked: false,
     };
     let project = project(vec![cue], vec![overlay]);
     let output = PathBuf::from(r"C:\exports\final.mp4");

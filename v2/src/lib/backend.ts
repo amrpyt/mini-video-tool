@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AnalyzeSilenceRequest,
+  CaptionTrack,
   DownloadRangeRequest,
   FilmstripRequest,
   PreviewFrameRequest,
@@ -33,4 +34,12 @@ export function extractFilmstrip(request: FilmstripRequest): Promise<string[]> {
 
 export function analyzeSilence(request: AnalyzeSilenceRequest): Promise<SilenceAnalysis> {
   return invoke("analyze_silence", { request });
+}
+
+export function importCaptions(path: string): Promise<CaptionTrack> {
+  return invoke("import_captions", { path });
+}
+
+export function getYouTubeCaptions(url: string): Promise<CaptionTrack> {
+  return invoke("youtube_captions", { url });
 }

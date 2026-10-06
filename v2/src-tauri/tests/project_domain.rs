@@ -56,6 +56,7 @@ fn sample_project(source_path: PathBuf) -> Project {
         },
         overlays: vec![Overlay {
             id: "logo".into(),
+            kind: Default::default(),
             range: TimeRange::new(10_000_000, 30_000_000).expect("valid overlay range"),
             geometry: NormalizedRect {
                 x: 0.05,
@@ -63,6 +64,9 @@ fn sample_project(source_path: PathBuf) -> Project {
                 width: 0.2,
                 height: 0.2,
             },
+            opacity: 1.0,
+            asset_path: None,
+            aspect_locked: false,
         }],
         captions: CaptionTrack {
             enabled: true,
@@ -70,6 +74,7 @@ fn sample_project(source_path: PathBuf) -> Project {
             style: CaptionStyle {
                 font_family: Some("Arial".into()),
                 font_size_px: Some(48),
+                ..CaptionStyle::default()
             },
         },
         export: ExportSettings {

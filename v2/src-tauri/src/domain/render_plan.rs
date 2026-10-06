@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::error::AppError;
 
 use super::{
-    project::{ExportSettings, NormalizedRect, Project, SourceMetadata},
+    project::{CaptionStyle, ExportSettings, NormalizedRect, OverlayKind, Project, SourceMetadata},
     time::{MediaTime, TimeRange},
 };
 
@@ -30,8 +30,11 @@ pub struct ResolvedCaptionCue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedOverlay {
     pub id: String,
+    pub kind: OverlayKind,
     pub spans: Vec<TimeRange>,
     pub geometry: NormalizedRect,
+    pub opacity: f32,
+    pub asset_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +43,7 @@ pub struct RenderPlan {
     keep_segments: Vec<TimeRange>,
     duration: MediaTime,
     captions: Vec<ResolvedCaptionCue>,
+    caption_style: Option<CaptionStyle>,
     overlays: Vec<ResolvedOverlay>,
     export: ExportSettings,
     output: PathBuf,
@@ -61,6 +65,10 @@ impl RenderPlan {
 
     pub fn captions(&self) -> &[ResolvedCaptionCue] {
         &self.captions
+    }
+
+    pub fn caption_style(&self) -> Option<&CaptionStyle> {
+        self.caption_style.as_ref()
     }
 
     pub fn overlays(&self) -> &[ResolvedOverlay] {
@@ -170,6 +178,10 @@ pub fn compile_render_plan(
     } else {
         Vec::new()
     };
+    let caption_style = project
+        .captions
+        .enabled
+        .then(|| project.captions.style.clone());
     let overlays = resolve_overlays(project, &keep_segments)?;
 
     Ok(RenderPlan {
@@ -177,6 +189,7 @@ pub fn compile_render_plan(
         keep_segments,
         duration,
         captions,
+        caption_style,
         overlays,
         export: project.export,
         output,
@@ -212,8 +225,11 @@ fn resolve_overlays(
         if !spans.is_empty() {
             resolved.push(ResolvedOverlay {
                 id: overlay.id.clone(),
+                kind: overlay.kind,
                 spans,
                 geometry: overlay.geometry,
+                opacity: overlay.opacity,
+                asset_path: overlay.asset_path.clone(),
             });
         }
     }
