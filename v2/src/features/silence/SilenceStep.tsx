@@ -7,6 +7,7 @@ interface SilenceStepProps {
   analysisIdentity: string;
   sourcePath: string | null;
   metadata: SourceMetadata | null;
+  canResolveSource?: boolean;
   selection: TimeRange | null;
   detectedRegions: TimeRange[];
   acceptedRegions: TimeRange[];
@@ -20,6 +21,7 @@ export function SilenceStep({
   analysisIdentity,
   sourcePath,
   metadata,
+  canResolveSource = false,
   selection,
   detectedRegions,
   acceptedRegions,
@@ -31,7 +33,9 @@ export function SilenceStep({
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const latestIdentityRef = useRef(analysisIdentity);
-  const canAnalyze = Boolean(sourcePath && metadata?.hasAudio && selection);
+  const canAnalyze = Boolean(
+    selection && ((sourcePath && metadata?.hasAudio) || (!sourcePath && canResolveSource)),
+  );
 
   useEffect(() => {
     latestIdentityRef.current = analysisIdentity;
@@ -71,7 +75,11 @@ export function SilenceStep({
         <p className="inspector-help">
           التحليل لا يقص الفيديو. هو يكتشف الصمت ويجهّز موجة صوتية، والقص الفعلي يحصل مرة واحدة وقت التصدير.
         </p>
-        {!sourcePath ? (
+        {!sourcePath && canResolveSource ? (
+          <p className="inspector-help">
+            عند التحليل، سيتم تحميل الجزء المحدد من يوتيوب تلقائيًا ثم تحليل الصمت عليه.
+          </p>
+        ) : !sourcePath ? (
           <p className="field-error">التحليل يحتاج ملف فيديو محليًا أولًا.</p>
         ) : metadata && !metadata.hasAudio ? (
           <p className="field-warning">المصدر لا يحتوي على مسار صوتي؛ يمكنك متابعة التحرير بدون تحليل صمت.</p>
@@ -82,7 +90,13 @@ export function SilenceStep({
           disabled={!canAnalyze || status === "running"}
           onClick={() => void analyze()}
         >
-          {status === "running" ? "جاري التحليل…" : "تحليل الصمت"}
+          {status === "running"
+            ? canResolveSource && !sourcePath
+              ? "جاري تحميل الجزء وتحليله…"
+              : "جاري التحليل…"
+            : canResolveSource && !sourcePath
+              ? "تحميل الجزء وتحليل الصمت"
+              : "تحليل الصمت"}
         </button>
         {error ? <p className="field-error">{error}</p> : null}
       </div>

@@ -88,6 +88,33 @@ describe("SilenceStep", () => {
     expect(actions.some((action) => action.type === "silence/setAnalysis")).toBe(true);
   });
 
+  it("allows a selected YouTube range to resolve locally when analysis starts", async () => {
+    const runAnalysis = vi.fn().mockResolvedValue({
+      detectedRegions: detected,
+      waveformImage: "C:\\cache\\youtube-wave.png",
+    });
+
+    render(
+      <SilenceStep
+        analysisIdentity="youtube:https://youtu.be/test|best|1000000|6000000"
+        sourcePath={null}
+        metadata={null}
+        canResolveSource
+        selection={{ start: 1_000_000, end: 6_000_000 }}
+        detectedRegions={[]}
+        acceptedRegions={[]}
+        dispatch={() => undefined}
+        runAnalysis={runAnalysis}
+        onWaveform={() => undefined}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "تحميل الجزء وتحليل الصمت" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(runAnalysis).toHaveBeenCalledTimes(1));
+  });
+
   it("ignores a completed analysis after source or selection identity changes", async () => {
     let resolveAnalysis!: (value: {
       detectedRegions: TimeRange[];

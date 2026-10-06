@@ -94,10 +94,13 @@ export function EditorWorkspace() {
           sourceOffset: activeYouTubeDownload.sourceOffset,
         }
       : null;
-  const silenceAnalysisIdentity =
-    analysisMedia && selection
-      ? `${analysisMedia.path}|${analysisMedia.sourceOffset}|${selection.start}|${selection.end}`
-      : "silence-unavailable";
+  const silenceAnalysisIdentity = selection
+    ? state.project.source.kind === "local"
+      ? `local:${state.project.source.path}|${selection.start}|${selection.end}`
+      : state.project.source.kind === "youtube"
+        ? `youtube:${state.project.source.url}|${state.project.source.downloadQuality}|${selection.start}|${selection.end}`
+        : "silence-unavailable"
+    : "silence-unavailable";
   const silenceAnalysisIdentityRef = useRef(silenceAnalysisIdentity);
   silenceAnalysisIdentityRef.current = silenceAnalysisIdentity;
 
@@ -271,10 +274,15 @@ export function EditorWorkspace() {
   }
 
   async function runSilenceAnalysis(): Promise<SilenceAnalysis | null> {
-    if (!analysisMedia || !selection) {
-      throw new Error("تحليل الصمت يحتاج ملفًا محليًا وتحديدًا صالحًا.");
-    }
     const requestIdentity = silenceAnalysisIdentity;
+    if (!selection) {
+      throw new Error("حدد جزءًا صالحًا من الفيديو قبل تحليل الصمت.");
+    }
+    const media = analysisMedia ?? (await resolveExportInput());
+    if (!media) {
+      throw new Error("حدد جزءًا أصغر من فيديو يوتيوب قبل تحليل الصمت.");
+    }
+    if (silenceAnalysisIdentityRef.current !== requestIdentity) return null;
     const cacheRoot = await appCacheDir();
     const waveformDestination = await join(
       cacheRoot,
@@ -283,11 +291,11 @@ export function EditorWorkspace() {
       `wave-${selection.start}-${selection.end}.png`,
     );
     const result = await analyzeSilence({
-      source: analysisMedia.path,
+      source: media.path,
       selection,
-      sourceOffset: analysisMedia.sourceOffset,
-      localDuration: analysisMedia.metadata.duration,
-      hasAudio: analysisMedia.metadata.hasAudio,
+      sourceOffset: media.sourceOffset,
+      localDuration: media.metadata.duration,
+      hasAudio: media.metadata.hasAudio,
       waveformDestination,
     });
     return silenceAnalysisIdentityRef.current === requestIdentity ? result : null;
@@ -439,6 +447,10 @@ export function EditorWorkspace() {
             analysisIdentity: silenceAnalysisIdentity,
             analysisSourcePath: analysisMedia?.path ?? null,
             analysisMetadata: analysisMedia?.metadata ?? null,
+            canResolveAnalysisSource:
+              state.project.source.kind === "youtube" &&
+              Boolean(selection) &&
+              !requiresNarrowerYouTubeRange(state.project),
             onWaveform: (path) => {
               if (!path || !selection) {
                 setWaveform(null);
@@ -566,6 +578,7 @@ function inspectorContent(
     analysisIdentity: string;
     analysisSourcePath: string | null;
     analysisMetadata: SourceMetadata | null;
+    canResolveAnalysisSource: boolean;
     onWaveform: (path: string | null) => void;
     selectedOverlayId: string | null;
     onSelectOverlay: (id: string | null) => void;
@@ -610,6 +623,7 @@ function inspectorContent(
           }
           sourcePath={silenceRuntime.analysisSourcePath}
           metadata={silenceRuntime.analysisMetadata}
+          canResolveSource={silenceRuntime.canResolveAnalysisSource}
           selection={state.project.selection}
           detectedRegions={state.project.silence.detectedRegions}
           acceptedRegions={state.project.silence.acceptedRemovedRegions}

@@ -2,25 +2,27 @@
 
 :root {
   font-family: Inter, "Segoe UI", Tahoma, Arial, sans-serif;
-  color: #f4f4f5;
-  background: #09090b;
+  color: #18181b;
+  background: #f6f7f9;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --bg: #09090b;
-  --surface: #111113;
-  --surface-raised: #18181b;
-  --surface-input: #0d0d0f;
-  --border: #2a2a2f;
-  --border-strong: #3f3f46;
-  --text: #f4f4f5;
-  --muted: #a1a1aa;
-  --subtle: #71717a;
-  --accent: #f4f4f5;
-  --accent-text: #111113;
-  --focus: #60a5fa;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --success: #86efac;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-raised: #f4f4f5;
+  --surface-input: #ffffff;
+  --border: #e4e4e7;
+  --border-strong: #cbd5e1;
+  --text: #18181b;
+  --text-muted: #71717a;
+  --muted: #71717a;
+  --subtle: #a1a1aa;
+  --accent: #18181b;
+  --accent-text: #ffffff;
+  --focus: #2563eb;
+  --warning: #b45309;
+  --danger: #dc2626;
+  --success: #15803d;
 }
 
 * {
@@ -1125,4 +1127,202 @@ textarea:focus-visible {
   .preview-stage {
     min-height: 240px;
   }
+}
+
+/* Light application chrome. Video pixels themselves stay on black so preview
+   framing and black-bar overlays remain visually accurate. */
+.error-notice,
+.danger-button {
+  color: #991b1b;
+}
+
+.local-badge,
+.step-button,
+.source-card,
+.frame-controls span,
+.silence-section-heading > span {
+  color: #52525b;
+}
+
+.step-button:hover,
+.secondary-button:hover:not(:disabled),
+.ghost-button:hover:not(:disabled) {
+  background: #f4f4f5;
+}
+
+.primary-button:hover:not(:disabled) {
+  border-color: #27272a;
+  color: #ffffff;
+  background: #27272a;
+}
+
+.stepper li[data-active="true"] .step-button {
+  border-color: #a1a1aa;
+  color: var(--text);
+  background: #f4f4f5;
+}
+
+.step-index {
+  color: #71717a;
+  background: #fafafa;
+}
+
+.stepper li[data-active="true"] .step-index {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.panel-heading,
+.inspector-footer,
+.section-divider,
+.frame-controls {
+  border-color: var(--border);
+}
+
+.panel-heading,
+.form-section h2,
+.step-placeholder h2,
+.step-form label,
+.secondary-button,
+.ghost-button,
+.frame-controls span {
+  color: var(--text);
+}
+
+.preview-stage {
+  border-color: var(--border);
+  background: #f4f4f5;
+}
+
+.preview-media-shell {
+  background: #e5e7eb;
+}
+
+.preview-source-card {
+  color: var(--text);
+}
+
+.inspector-footer,
+.inspector-section,
+.source-card,
+.export-summary {
+  background: #fafafa;
+}
+
+.section-divider {
+  background: var(--border);
+}
+
+.source-status-loading {
+  color: #2563eb;
+}
+
+.source-status-ready {
+  color: var(--success);
+}
+
+.field-warning {
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.inspector-section,
+.silence-region-row {
+  border-color: var(--border);
+}
+
+.silence-section-heading > span {
+  background: #ffffff;
+}
+
+.silence-region-row {
+  background: #ffffff;
+}
+
+.preview-youtube-caption {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.timeline-track {
+  border-color: var(--border-strong);
+  background: #f4f4f5;
+}
+
+.timeline-selection,
+.timeline-selection-window {
+  border-color: #a1a1aa;
+  background: #d4d4d8;
+}
+
+.timeline-playhead,
+.timeline-source-playhead {
+  background: #18181b;
+}
+
+.timeline-overview {
+  background: #e4e4e7;
+}
+
+.timeline-overview-dim {
+  background: #f8fafc;
+}
+
+.timeline-overview-selection {
+  border-color: #71717a;
+  background: #cbd5e1;
+}
+
+.timeline-surface {
+  border-color: var(--border-strong);
+  background: #fafafa;
+}
+
+.timeline-lane {
+  border-color: var(--border);
+  background: #f4f4f5;
+}
+
+.timeline-lane:nth-child(even) {
+  background: #fafafa;
+}
+
+.timeline-lane-label {
+  border-color: var(--border);
+  color: #52525b;
+  background: #e4e4e7;
+}
+
+.timeline-caption-region {
+  border-color: #60a5fa;
+  background: #bfdbfe;
+}
+
+.timeline-overlay-region {
+  border-color: #a78bfa;
+  background: #ddd6fe;
+}
+
+.overlay-list-item.selected {
+  background: #e4e4e7;
+}
+
+.timeline-cut-region-detected {
+  border-color: #71717a;
+  background: #d4d4d8;
+}
+
+.timeline-cut-region-accepted {
+  border-color: #f87171;
+  background: #fecaca;
+}
+
+.timeline-range-handle {
+  border-color: #ffffff;
+  background: #52525b;
+}
+
+.timeline-range-handle:hover {
+  background: #71717a;
 }
