@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface ErrorNoticeProps {
   message: string;
@@ -7,6 +7,7 @@ interface ErrorNoticeProps {
 
 export function ErrorNotice({ message, technicalDetails }: ErrorNoticeProps) {
   const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [message, technicalDetails]);
   return (
     <section className="error-notice" role="alert">
       <strong>{message}</strong>

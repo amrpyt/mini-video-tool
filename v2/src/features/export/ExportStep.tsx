@@ -13,6 +13,7 @@ interface ExportStepProps {
   resolvedInput?: ResolvedExportInput | null;
   resolveInput?: () => Promise<ResolvedExportInput | null>;
   exportProject?: (request: ExportProjectRequest) => Promise<number>;
+  onRuntimeError?: (error: unknown | null) => void;
 }
 
 export function ExportStep({
@@ -22,6 +23,7 @@ export function ExportStep({
   resolvedInput,
   resolveInput,
   exportProject = invokeExportProject,
+  onRuntimeError,
 }: ExportStepProps) {
   const [status, setStatus] = useState<string | null>(null);
   const localInput: ResolvedExportInput | null =
@@ -53,8 +55,10 @@ export function ExportStep({
       setStatus("بدء التصدير…");
       const jobId = await exportProject(buildExportRequest(project, nextInput, outputPath));
       setStatus(`بدأت عملية التصدير رقم ${jobId}`);
+      onRuntimeError?.(null);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      setStatus("تعذر بدء التصدير.");
+      onRuntimeError?.(error);
     }
   }
 

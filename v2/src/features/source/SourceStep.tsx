@@ -9,6 +9,7 @@ import type { DownloadQuality } from "../../lib/types";
 interface SourceStepProps {
   state: EditorState;
   dispatch: (action: EditorAction) => void;
+  onRuntimeError?: (error: unknown | null) => void;
 }
 
 const QUALITY_OPTIONS: Array<{ value: DownloadQuality; label: string }> = [
@@ -19,7 +20,7 @@ const QUALITY_OPTIONS: Array<{ value: DownloadQuality; label: string }> = [
   { value: "p360", label: "360p" },
 ];
 
-export function SourceStep({ state, dispatch }: SourceStepProps) {
+export function SourceStep({ state, dispatch, onRuntimeError }: SourceStepProps) {
   const [localPath, setLocalPath] = useState(
     state.project.source.kind === "local" ? state.project.source.path : "",
   );
@@ -37,10 +38,12 @@ export function SourceStep({ state, dispatch }: SourceStepProps) {
     try {
       const metadata = await probeSource(path);
       dispatch({ type: "source/localLoaded", path, metadata });
+      onRuntimeError?.(null);
     } catch (error) {
+      onRuntimeError?.(error);
       dispatch({
         type: "source/setStatus",
-        status: { kind: "error", message: error instanceof Error ? error.message : "تعذر فحص الملف" },
+        status: { kind: "error", message: "تعذر فحص الملف" },
       });
     }
   }
@@ -75,10 +78,12 @@ export function SourceStep({ state, dispatch }: SourceStepProps) {
     try {
       const metadata = await getYouTubeMetadata(url);
       dispatch({ type: "source/youtubeLoaded", url, metadata });
+      onRuntimeError?.(null);
     } catch (error) {
+      onRuntimeError?.(error);
       dispatch({
         type: "source/setStatus",
-        status: { kind: "error", message: error instanceof Error ? error.message : "تعذر قراءة بيانات يوتيوب" },
+        status: { kind: "error", message: "تعذر قراءة بيانات يوتيوب" },
       });
     }
   }

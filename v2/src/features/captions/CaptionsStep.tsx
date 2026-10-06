@@ -11,6 +11,7 @@ interface CaptionsStepProps {
   importCaptions: () => Promise<CaptionTrack | null>;
   loadYouTubeCaptions: () => Promise<CaptionTrack | null>;
   chooseFont: () => Promise<string | null>;
+  onRuntimeError?: (error: unknown | null) => void;
 }
 
 export function CaptionsStep({
@@ -21,6 +22,7 @@ export function CaptionsStep({
   importCaptions,
   loadYouTubeCaptions,
   chooseFont,
+  onRuntimeError,
 }: CaptionsStepProps) {
   const [busy, setBusy] = useState<"import" | "youtube" | "font" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +33,10 @@ export function CaptionsStep({
     try {
       const result = kind === "import" ? await importCaptions() : await loadYouTubeCaptions();
       if (result) dispatch({ type: "captions/setTrack", track: result });
+      onRuntimeError?.(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError("تعذر تحميل الكابشن.");
+      onRuntimeError?.(reason);
     } finally {
       setBusy(null);
     }
@@ -46,8 +50,10 @@ export function CaptionsStep({
       if (path) {
         dispatch({ type: "captions/updateStyle", patch: { fontPath: path } });
       }
+      onRuntimeError?.(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError("تعذر اختيار الخط.");
+      onRuntimeError?.(reason);
     } finally {
       setBusy(null);
     }

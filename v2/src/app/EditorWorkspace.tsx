@@ -261,6 +261,11 @@ export function EditorWorkspace() {
       const snapshot = await cancelJob(jobId);
       setJobSnapshot((current) => mergeJobSnapshot(current, snapshot));
     } catch (error) {
+      try {
+        setJobSnapshot(await latestJob());
+      } catch {
+        setJobSnapshot(null);
+      }
       setRuntimeError(describeAppError(error));
     }
   }
@@ -466,6 +471,8 @@ export function EditorWorkspace() {
                     }
                   : null,
             resolveExportInput,
+            reportRuntimeError: (error) =>
+              setRuntimeError(error === null ? null : describeAppError(error)),
             chooseExportOutput: async () => {
               const selected = await chooseExportFile();
               if (selected) setExportPath(selected);
@@ -569,12 +576,19 @@ function inspectorContent(
     exportPath: string;
     resolvedExportInput: ResolvedExportInput | null;
     resolveExportInput: () => Promise<ResolvedExportInput | null>;
+    reportRuntimeError: (error: unknown | null) => void;
     chooseExportOutput: () => Promise<string | null>;
   },
 ) {
   switch (state.activeStep) {
     case "Source":
-      return <SourceStep state={state} dispatch={dispatch} />;
+      return (
+        <SourceStep
+          state={state}
+          dispatch={dispatch}
+          onRuntimeError={silenceRuntime.reportRuntimeError}
+        />
+      );
     case "Range":
       return <RangeStep state={state} dispatch={dispatch} />;
     case "Export":
@@ -585,6 +599,7 @@ function inspectorContent(
           onChooseOutput={silenceRuntime.chooseExportOutput}
           resolvedInput={silenceRuntime.resolvedExportInput}
           resolveInput={silenceRuntime.resolveExportInput}
+          onRuntimeError={silenceRuntime.reportRuntimeError}
         />
       );
     case "Silence":
@@ -601,6 +616,7 @@ function inspectorContent(
           dispatch={dispatch}
           runAnalysis={silenceRuntime.runAnalysis}
           onWaveform={silenceRuntime.onWaveform}
+          onRuntimeError={silenceRuntime.reportRuntimeError}
         />
       );
     case "Design":
@@ -629,6 +645,7 @@ function inspectorContent(
           importCaptions={silenceRuntime.importCaptions}
           loadYouTubeCaptions={silenceRuntime.loadYouTubeCaptions}
           chooseFont={silenceRuntime.chooseFont}
+          onRuntimeError={silenceRuntime.reportRuntimeError}
         />
       );
   }
@@ -682,46 +699,62 @@ function StepPlaceholder({ title, text, warning = false }: { title: string; text
 function useEditorShortcuts(state: EditorState, dispatch: (action: EditorAction) => void) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const tagName = target?.tagName?.toLowerCase();
-      if (tagName === "input" || tagName === "textarea" || tagName === "select" || target?.isContentEditable) {
-        return;
-      }
-
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        dispatch({ type: event.shiftKey ? "history/redo" : "history/undo" });
-        return;
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        dispatch({ type: "history/redo" });
-        return;
-      }
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
-
-      const selection = state.project.selection;
-      const durationUs = sourceDurationUs(state.project);
-      if (!selection || durationUs <= 0) return;
-
-      const key = event.key.toLowerCase();
-      if (key === "i" && state.playheadUs < selection.end) {
-        event.preventDefault();
-        dispatch({ type: "project/setSelection", selection: { start: state.playheadUs, end: selection.end } });
-      } else if (key === "o" && state.playheadUs > selection.start) {
-        event.preventDefault();
-        dispatch({ type: "project/setSelection", selection: { start: selection.start, end: state.playheadUs } });
-      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        const frames = event.key === "ArrowRight" ? 1 : -1;
-        const next = frameStepUs(state.playheadUs, frames, projectFrameRate(state.project));
-        dispatch({ type: "playhead/set", valueUs: Math.max(0, Math.min(durationUs, next)) });
-      }
+      handleEditorShortcut(event, state, dispatch);
     }
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [dispatch, state]);
+}
+
+export function shouldIgnoreEditorShortcut(target: EventTarget | null): boolean {
+  const element = target instanceof HTMLElement ? target : null;
+  const tagName = element?.tagName?.toLowerCase();
+  return Boolean(
+    tagName === "input" ||
+      tagName === "textarea" ||
+      tagName === "select" ||
+      tagName === "button" ||
+      element?.isContentEditable,
+  );
+}
+
+export function handleEditorShortcut(
+  event: KeyboardEvent,
+  state: EditorState,
+  dispatch: (action: EditorAction) => void,
+) {
+  if (shouldIgnoreEditorShortcut(event.target)) return;
+
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    dispatch({ type: event.shiftKey ? "history/redo" : "history/undo" });
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
+    event.preventDefault();
+    dispatch({ type: "history/redo" });
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+  const selection = state.project.selection;
+  const durationUs = sourceDurationUs(state.project);
+  if (!selection || durationUs <= 0) return;
+
+  const key = event.key.toLowerCase();
+  if (key === "i" && state.playheadUs < selection.end) {
+    event.preventDefault();
+    dispatch({ type: "project/setSelection", selection: { start: state.playheadUs, end: selection.end } });
+  } else if (key === "o" && state.playheadUs > selection.start) {
+    event.preventDefault();
+    dispatch({ type: "project/setSelection", selection: { start: selection.start, end: state.playheadUs } });
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    const frames = event.key === "ArrowRight" ? 1 : -1;
+    const next = frameStepUs(state.playheadUs, frames, projectFrameRate(state.project));
+    dispatch({ type: "playhead/set", valueUs: Math.max(0, Math.min(durationUs, next)) });
+  }
 }
 
 function useLocalFilmstrip(

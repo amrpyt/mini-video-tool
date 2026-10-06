@@ -151,6 +151,31 @@ describe("Preview", () => {
     expect(pause).not.toHaveBeenCalled();
   });
 
+  it("gives the icon-only resize control an accessible name", () => {
+    render(
+      <Preview
+        source={localSource}
+        playheadUs={1_000_000}
+        overlays={[
+          {
+            id: "overlay-accessible",
+            kind: "blackBar",
+            range: { start: 0, end: 2_000_000 },
+            geometry: { x: 0.1, y: 0.1, width: 0.4, height: 0.2 },
+            opacity: 1,
+            assetPath: null,
+            aspectLocked: false,
+          },
+        ]}
+        selectedOverlayId="overlay-accessible"
+        onOverlayGeometryChange={vi.fn()}
+        toAssetUrl={() => "asset://clip.mp4"}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "تغيير حجم العنصر" })).toBeInTheDocument();
+  });
+
   it("keeps caption left/right physical and measures vertical margin from frame height", () => {
     const style = {
       ...createDefaultCaptionStyle(),

@@ -24,9 +24,12 @@ export function createAutosaveController<T>(
 
   function runPending(): Promise<void> {
     clearTimer();
+    if (inFlight) {
+      return inFlight.then(() => runPending());
+    }
     const value = pending;
     pending = null;
-    if (value === null) return inFlight ?? Promise.resolve();
+    if (value === null) return Promise.resolve();
     const run = save(value).catch((error) => {
       onError(error);
     });

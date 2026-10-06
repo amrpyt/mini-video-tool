@@ -38,4 +38,31 @@ describe("project autosave", () => {
     expect(save).toHaveBeenCalledTimes(1);
     controller.dispose();
   });
+
+  it("serializes saves so an older slow write cannot replace a newer snapshot", async () => {
+    vi.useFakeTimers();
+    let resolveFirst!: () => void;
+    const first = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const saved: number[] = [];
+    const save = vi.fn(async (value: { revision: number }) => {
+      saved.push(value.revision);
+      if (value.revision === 1) await first;
+    });
+    const controller = createAutosaveController(save, 750);
+
+    controller.schedule({ revision: 1 });
+    await vi.advanceTimersByTimeAsync(750);
+    expect(saved).toEqual([1]);
+
+    controller.schedule({ revision: 2 });
+    await vi.advanceTimersByTimeAsync(750);
+    expect(saved).toEqual([1]);
+
+    resolveFirst();
+    await controller.flush();
+    expect(saved).toEqual([1, 2]);
+    controller.dispose();
+  });
 });

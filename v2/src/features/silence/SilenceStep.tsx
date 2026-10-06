@@ -13,6 +13,7 @@ interface SilenceStepProps {
   dispatch: (action: EditorAction) => void;
   runAnalysis: () => Promise<SilenceAnalysis | null>;
   onWaveform: (path: string | null) => void;
+  onRuntimeError?: (error: unknown | null) => void;
 }
 
 export function SilenceStep({
@@ -25,6 +26,7 @@ export function SilenceStep({
   dispatch,
   runAnalysis,
   onWaveform,
+  onRuntimeError,
 }: SilenceStepProps) {
   const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -51,12 +53,14 @@ export function SilenceStep({
       dispatch({ type: "silence/setAnalysis", detectedRegions: result.detectedRegions });
       onWaveform(result.waveformImage);
       setStatus("idle");
+      onRuntimeError?.(null);
     } catch (reason) {
       if (latestIdentityRef.current !== requestIdentity) {
         return;
       }
       setStatus("error");
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError("تعذر تحليل الصمت.");
+      onRuntimeError?.(reason);
     }
   }
 

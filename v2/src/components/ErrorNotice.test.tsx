@@ -28,4 +28,15 @@ describe("ErrorNotice", () => {
       }),
     );
   });
+
+  it("collapses technical details when a new error arrives", () => {
+    const { rerender } = render(
+      <ErrorNotice message="خطأ أول" technicalDetails="first details" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "التفاصيل التقنية" }));
+    expect(screen.getByText("first details")).toBeInTheDocument();
+
+    rerender(<ErrorNotice message="خطأ ثان" technicalDetails="second details" />);
+    expect(screen.queryByText("second details")).not.toBeInTheDocument();
+  });
 });

@@ -10,6 +10,8 @@ describe("App shell", () => {
   it("shows the six editor steps without the Python v1 tabs", () => {
     const { container } = render(<App />);
 
+    expect(container.firstElementChild).toHaveAttribute("dir", "rtl");
+
     for (const label of [
       "المصدر",
       "التحديد",
@@ -30,6 +32,11 @@ describe("App shell", () => {
     expect(screen.getByRole("region", { name: "المعاينة" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "الإعدادات" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "الخط الزمني" })).toBeInTheDocument();
+    for (const name of ["فتح مشروع", "حفظ المشروع", "المصدر", "التالي"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.tagName).toBe("BUTTON");
+      expect(button).not.toHaveAttribute("tabindex", "-1");
+    }
 
     expect(screen.queryByText("تحميل جزء")).not.toBeInTheDocument();
     expect(screen.queryByText("قص الصمت")).not.toBeInTheDocument();
