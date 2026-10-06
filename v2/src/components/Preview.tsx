@@ -126,6 +126,33 @@ export function Preview({
     };
   }, [captionTrack?.style.fontPath, toAssetUrl]);
 
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.code !== "Space" || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (
+        tag === "input" ||
+        tag === "textarea" ||
+        tag === "select" ||
+        tag === "button" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      const video = videoRef.current;
+      if (!video || source.kind !== "local" || nativeFailed) return;
+      event.preventDefault();
+      if (video.paused) {
+        void video.play().catch(() => undefined);
+      } else {
+        video.pause();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [nativeFailed, source.kind]);
+
   async function onNativeError() {
     if (source.kind !== "local" || nativeFailed || requestingStill) return;
     setNativeFailed(true);

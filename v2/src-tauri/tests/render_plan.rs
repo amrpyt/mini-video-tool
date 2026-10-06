@@ -36,6 +36,11 @@ fn project(cues: Vec<CaptionCue>, overlays: Vec<Overlay>) -> Project {
         source: SourceState {
             path: Some(PathBuf::from(r"C:\media\source.mp4")),
             metadata: Some(metadata()),
+            url: None,
+            youtube_metadata: None,
+            resolved_path: None,
+            source_offset: None,
+            resolved_metadata: None,
             download_quality: DownloadQuality::Best,
         },
         selection: Some(range(10, 30)),

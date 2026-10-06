@@ -6,7 +6,9 @@ use std::{
 use crate::error::AppError;
 
 use super::{
-    state::{JobId, JobKind, JobOutcome, JobProgress, JobRecord, JobStatus, ManagerState},
+    state::{
+        JobId, JobKind, JobOutcome, JobProgress, JobRecord, JobSnapshot, JobStatus, ManagerState,
+    },
     windows::terminate_process_tree,
 };
 
@@ -106,11 +108,26 @@ impl JobManager {
     }
 
     pub fn cancel_active(&self) -> Result<(), AppError> {
+        let job = {
+            let state = self.lock_state()?;
+            state
+                .active
+                .ok_or_else(|| AppError::InvalidInput("there is no active job".into()))?
+        };
+        self.cancel(job)
+    }
+
+    pub fn cancel(&self, requested_job: JobId) -> Result<(), AppError> {
         let (job, kind, pid) = {
             let mut state = self.lock_state()?;
             let job = state
                 .active
                 .ok_or_else(|| AppError::InvalidInput("there is no active job".into()))?;
+            if job != requested_job {
+                return Err(AppError::InvalidInput(
+                    "requested job is no longer the active operation".into(),
+                ));
+            }
             let record = state
                 .jobs
                 .get_mut(&job)
@@ -284,6 +301,34 @@ impl JobManager {
             .get(&job)
             .map(|record| record.progress.clone())
             .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))
+    }
+
+    pub fn snapshot(&self, job: JobId) -> Result<JobSnapshot, AppError> {
+        let state = self.lock_state()?;
+        let record = state
+            .jobs
+            .get(&job)
+            .ok_or_else(|| AppError::InvalidInput("unknown job id".into()))?;
+        Ok(JobSnapshot {
+            id: job,
+            kind: record.kind,
+            status: record.status,
+            progress: record.progress.clone(),
+        })
+    }
+
+    pub fn latest_snapshot(&self) -> Result<Option<JobSnapshot>, AppError> {
+        let state = self.lock_state()?;
+        if state.next_id == 0 {
+            return Ok(None);
+        }
+        let job = JobId(state.next_id);
+        Ok(state.jobs.get(&job).map(|record| JobSnapshot {
+            id: job,
+            kind: record.kind,
+            status: record.status,
+            progress: record.progress.clone(),
+        }))
     }
 
     fn lock_state(&self) -> Result<MutexGuard<'_, ManagerState>, AppError> {

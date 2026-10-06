@@ -127,6 +127,30 @@ describe("Preview", () => {
     await waitFor(() => expect(requestStillFrame).toHaveBeenCalledWith(localSource.path, 2_000_000));
   });
 
+  it("uses Space for native play/pause but ignores Space while typing", () => {
+    render(
+      <>
+        <input aria-label="حقل كتابة" />
+        <Preview source={localSource} playheadUs={0} toAssetUrl={() => "asset://clip.mp4"} />
+      </>,
+    );
+    const video = screen.getByTestId("native-preview-video") as HTMLVideoElement;
+    const play = vi.fn().mockResolvedValue(undefined);
+    const pause = vi.fn();
+    Object.defineProperty(video, "play", { value: play });
+    Object.defineProperty(video, "pause", { value: pause });
+    Object.defineProperty(video, "paused", { value: true, configurable: true });
+
+    fireEvent.keyDown(document.body, { code: "Space", key: " " });
+    expect(play).toHaveBeenCalledTimes(1);
+
+    const input = screen.getByRole("textbox", { name: "حقل كتابة" });
+    input.focus();
+    fireEvent.keyDown(input, { code: "Space", key: " " });
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(pause).not.toHaveBeenCalled();
+  });
+
   it("keeps caption left/right physical and measures vertical margin from frame height", () => {
     const style = {
       ...createDefaultCaptionStyle(),

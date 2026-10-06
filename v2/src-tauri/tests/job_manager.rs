@@ -359,3 +359,17 @@ fn cancelled_export_cannot_enter_atomic_publication() {
     assert!(!*published.lock().expect("lock publication flag"));
     assert_eq!(manager.status(job).expect("status"), JobStatus::Cancelled);
 }
+
+#[test]
+fn cancelling_by_stale_job_id_never_cancels_a_newer_operation() {
+    let manager = JobManager::with_terminator(|_| Ok(()));
+    let first = manager.begin(JobKind::Download).expect("start first job");
+    manager
+        .finish(first, JobOutcome::Completed)
+        .expect("finish first job");
+    let second = manager.begin(JobKind::Export).expect("start second job");
+
+    assert!(manager.cancel(first).is_err());
+    assert_eq!(manager.status(first).unwrap(), JobStatus::Completed);
+    assert_eq!(manager.status(second).unwrap(), JobStatus::Running);
+}

@@ -6,6 +6,9 @@ import type {
   DownloadRangeRequest,
   ExportProjectRequest,
   FilmstripRequest,
+  JobSnapshot,
+  ProjectLoadResult,
+  CanonicalExportProject,
   PreviewFrameRequest,
   ResolvedDownload,
   SilenceAnalysis,
@@ -47,4 +50,24 @@ export function getYouTubeCaptions(url: string): Promise<CaptionTrack> {
 
 export function exportProject(request: ExportProjectRequest): Promise<number> {
   return invoke("export_project", { request });
+}
+
+export function saveProject(path: string, project: CanonicalExportProject): Promise<void> {
+  return invoke("save_project", { path, project });
+}
+
+export function loadProject(path: string): Promise<ProjectLoadResult> {
+  return invoke("load_project", { path });
+}
+
+export function loadProjectIfExists(path: string): Promise<ProjectLoadResult | null> {
+  return invoke("load_project_if_exists", { path });
+}
+
+export function latestJob(): Promise<JobSnapshot | null> {
+  return invoke("latest_job");
+}
+
+export function cancelJob(job: number): Promise<JobSnapshot> {
+  return invoke("cancel_job", { job });
 }

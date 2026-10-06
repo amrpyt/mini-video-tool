@@ -1,13 +1,10 @@
 import { useState } from "react";
 
 import type { EditorProject } from "../../app/editorReducer";
+import { toProjectDocument } from "../../app/projectDocument";
 import { formatTimeInput } from "../range/timeInput";
 import { exportProject as invokeExportProject } from "../../lib/backend";
-import type {
-  CanonicalExportProject,
-  ExportProjectRequest,
-  ResolvedExportInput,
-} from "../../lib/types";
+import type { ExportProjectRequest, ResolvedExportInput } from "../../lib/types";
 
 interface ExportStepProps {
   project: EditorProject;
@@ -106,34 +103,12 @@ export function buildExportRequest(
   input: ResolvedExportInput,
   output: string,
 ): ExportProjectRequest {
-  const canonical: CanonicalExportProject = {
-    schemaVersion: project.schemaVersion,
-    source: {
-      path: input.path,
-      metadata: input.metadata,
-      downloadQuality: project.source.downloadQuality,
-    },
-    selection: project.selection,
-    silence: {
-      detectedRegions: project.silence.detectedRegions.map((range) => ({ ...range })),
-      acceptedRemovedRegions: project.silence.acceptedRemovedRegions.map((range) => ({ ...range })),
-    },
-    overlays: project.overlays.map((overlay) => ({
-      ...overlay,
-      range: { ...overlay.range },
-      geometry: { ...overlay.geometry },
-    })),
-    captions: {
-      enabled: project.captions.enabled,
-      cues: project.captions.cues.map((cue) => ({ ...cue })),
-      style: { ...project.captions.style },
-    },
-    export: {
-      width: project.export.width,
-      height: project.export.height,
-      frameRate: { ...project.export.frameRate },
-    },
-  };
+  const canonical = toProjectDocument(
+    project,
+    project.source.kind === "youtube"
+      ? { path: input.path, sourceOffset: input.sourceOffset, metadata: input.metadata }
+      : null,
+  );
   return { project: canonical, input, output, preferHardware: true };
 }
 

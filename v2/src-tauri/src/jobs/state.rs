@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct JobId(pub u64);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum JobKind {
     Download,
     SilenceAnalysis,
@@ -28,13 +28,23 @@ impl JobStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JobProgress {
     pub stage: String,
     pub fraction: Option<f64>,
     pub speed: Option<String>,
     pub eta_seconds: Option<u64>,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobSnapshot {
+    pub id: JobId,
+    pub kind: JobKind,
+    pub status: JobStatus,
+    pub progress: Option<JobProgress>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -121,6 +121,11 @@ export interface CaptionTrack {
 export interface CanonicalProjectSource {
   path: string | null;
   metadata: SourceMetadata | null;
+  url?: string | null;
+  youtubeMetadata?: YouTubeMetadata | null;
+  resolvedPath?: string | null;
+  sourceOffset?: MediaTime | null;
+  resolvedMetadata?: SourceMetadata | null;
   downloadQuality: DownloadQuality;
 }
 
@@ -152,4 +157,32 @@ export interface ExportProjectRequest {
   input: ResolvedExportInput;
   output: string;
   preferHardware: boolean;
+}
+
+export type SourceAvailability =
+  | { kind: "available" }
+  | { kind: "unavailable"; message: string }
+  | { kind: "notApplicable" };
+
+export interface ProjectLoadResult {
+  project: CanonicalExportProject;
+  sourceAvailability: SourceAvailability;
+}
+
+export type JobKind = "Download" | "SilenceAnalysis" | "Export";
+export type JobStatus = "Queued" | "Running" | "Cancelling" | "Completed" | "Failed" | "Cancelled";
+
+export interface JobProgress {
+  stage: string;
+  fraction: number | null;
+  speed: string | null;
+  etaSeconds: number | null;
+  message: string;
+}
+
+export interface JobSnapshot {
+  id: number;
+  kind: JobKind;
+  status: JobStatus;
+  progress: JobProgress | null;
 }

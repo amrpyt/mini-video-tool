@@ -1,9 +1,11 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { appCacheDir, join } from "@tauri-apps/api/path";
+import { appCacheDir, appDataDir, join } from "@tauri-apps/api/path";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useReducer, useRef, useState } from "react";
 
+import { describeAppError, ErrorNotice } from "../components/ErrorNotice";
 import { Inspector } from "../components/Inspector";
+import { mergeJobSnapshot, OperationCockpit } from "../components/OperationCockpit";
 import { Preview } from "../components/Preview";
 import { Stepper, STEP_LABELS } from "../components/Stepper";
 import { Timeline, type FilmstripFrame } from "../components/timeline/Timeline";
@@ -16,19 +18,28 @@ import { SilenceStep } from "../features/silence/SilenceStep";
 import { SourceStep } from "../features/source/SourceStep";
 import {
   analyzeSilence,
+  cancelJob,
   downloadRange,
   extractFilmstrip,
   getYouTubeCaptions,
   importCaptions,
+  latestJob,
+  loadProject,
+  loadProjectIfExists,
+  saveProject,
 } from "../lib/backend";
 import type {
   CaptionTrack,
+  CanonicalExportProject,
+  JobSnapshot,
+  ProjectLoadResult,
   ResolvedDownload,
   ResolvedExportInput,
   SilenceAnalysis,
   SourceMetadata,
   TimeRange,
 } from "../lib/types";
+import { createAutosaveController, type AutosaveController } from "./autosave";
 import {
   EDITOR_STEPS,
   createInitialEditorState,
@@ -40,26 +51,31 @@ import {
   type EditorState,
   type EditorStep,
 } from "./editorReducer";
+import { fromProjectDocument, toProjectDocument } from "./projectDocument";
 
 export function EditorWorkspace() {
   const [state, dispatch] = useReducer(editorReducer, undefined, createInitialEditorState);
   const [waveform, setWaveform] = useState<{ url: string; range: TimeRange } | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
   const [exportPath, setExportPath] = useState("");
+  const [projectPath, setProjectPath] = useState<string | null>(null);
+  const [recoveryPath, setRecoveryPath] = useState<string | null>(null);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+  const [recoveryWritable, setRecoveryWritable] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<ReturnType<typeof describeAppError> | null>(null);
+  const [jobSnapshot, setJobSnapshot] = useState<JobSnapshot | null>(null);
   const [resolvedYouTube, setResolvedYouTube] = useState<{
     identity: string;
     value: ResolvedDownload;
   } | null>(null);
+  const autosaveRef = useRef<AutosaveController<ReturnType<typeof toProjectDocument>> | null>(null);
 
   useEditorShortcuts(state, dispatch);
 
   const selection = state.project.selection;
   const durationUs = sourceDurationUs(state.project);
   const localSource = state.project.source.kind === "local" ? state.project.source : null;
-  const youtubeDownloadIdentity =
-    state.project.source.kind === "youtube" && selection
-      ? `${state.project.source.url}|${selection.start}|${selection.end}|${state.project.source.downloadQuality}`
-      : "youtube-download-unavailable";
+  const youtubeDownloadIdentity = projectYouTubeDownloadIdentity(state.project);
   const youtubeDownloadIdentityRef = useRef(youtubeDownloadIdentity);
   youtubeDownloadIdentityRef.current = youtubeDownloadIdentity;
   const activeYouTubeDownload =
@@ -99,8 +115,155 @@ export function EditorWorkspace() {
   useEffect(() => {
     setSelectedOverlayId(null);
     setExportPath("");
-    setResolvedYouTube(null);
   }, [sourceIdentity]);
+
+  useEffect(() => {
+    let disposed = false;
+    async function restoreRecoveryProject() {
+      try {
+        const root = await appDataDir();
+        const path = await join(root, "mini-video-tool-v2", "recovery.mvt");
+        if (disposed) return;
+        setRecoveryPath(path);
+        const recovered = await loadProjectIfExists(path);
+        if (disposed) return;
+        if (recovered) applyLoadedProject(recovered, null);
+        setRecoveryWritable(true);
+      } catch (error) {
+        if (!disposed) {
+          setRuntimeError(describeAppError(error));
+          setRecoveryWritable(false);
+        }
+      } finally {
+        if (!disposed) setRecoveryReady(true);
+      }
+    }
+    void restoreRecoveryProject();
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    autosaveRef.current?.dispose();
+    autosaveRef.current = null;
+    if (!recoveryReady || !recoveryWritable || !recoveryPath) return;
+    const controller = createAutosaveController<CanonicalExportProject>(
+      (project) => saveProject(recoveryPath, project),
+      750,
+      (error) => setRuntimeError(describeAppError(error)),
+    );
+    autosaveRef.current = controller;
+    return () => {
+      void controller.flush();
+      controller.dispose();
+      if (autosaveRef.current === controller) autosaveRef.current = null;
+    };
+  }, [recoveryPath, recoveryReady, recoveryWritable]);
+
+  useEffect(() => {
+    if (!recoveryReady || !recoveryWritable) return;
+    autosaveRef.current?.scheduleIfChanged(toProjectDocument(state.project, activeYouTubeDownload));
+  }, [activeYouTubeDownload, recoveryReady, recoveryWritable, state.project]);
+
+  useEffect(() => {
+    let disposed = false;
+    let polling = false;
+    async function pollJob() {
+      if (polling) return;
+      polling = true;
+      try {
+        const incoming = await latestJob();
+        if (!disposed) setJobSnapshot((current) => mergeJobSnapshot(current, incoming));
+      } catch {
+        // Job polling is best-effort; operation failures surface through their owning action.
+      } finally {
+        polling = false;
+      }
+    }
+    void pollJob();
+    const timer = window.setInterval(() => void pollJob(), 500);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  function applyLoadedProject(result: ProjectLoadResult, path: string | null) {
+    const hydrated = fromProjectDocument(result.project);
+    dispatch({
+      type: "project/load",
+      project: hydrated.project,
+      sourceStatus:
+        result.sourceAvailability.kind === "unavailable"
+          ? { kind: "error", message: "ملف المصدر غير متاح" }
+          : { kind: "ready", message: "تم تحميل المشروع" },
+    });
+    const resolved = hydrated.resolvedYouTube;
+    setResolvedYouTube(
+      resolved
+        ? { identity: projectYouTubeDownloadIdentity(hydrated.project), value: resolved }
+        : null,
+    );
+    setProjectPath(path);
+    setWaveform(null);
+    setSelectedOverlayId(null);
+    setExportPath("");
+    if (result.sourceAvailability.kind === "unavailable") {
+      setRuntimeError(
+        describeAppError({ SourceUnavailable: result.sourceAvailability.message }),
+      );
+    } else {
+      setRuntimeError(null);
+    }
+  }
+
+  async function openProjectFile() {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Mini Video Tool Project", extensions: ["mvt"] }],
+    });
+    if (typeof selected !== "string") return;
+    try {
+      applyLoadedProject(await loadProject(selected), selected);
+    } catch (error) {
+      setRuntimeError(describeAppError(error));
+    }
+  }
+
+  async function saveProjectFile() {
+    let path = projectPath;
+    if (!path) {
+      const selected = await save({
+        filters: [{ name: "Mini Video Tool Project", extensions: ["mvt"] }],
+        defaultPath: "project.mvt",
+      });
+      if (typeof selected !== "string") return;
+      path = selected;
+    }
+    try {
+      await saveProject(path, toProjectDocument(state.project, activeYouTubeDownload));
+      setProjectPath(path);
+      setRuntimeError(null);
+    } catch (error) {
+      setRuntimeError(describeAppError(error));
+    }
+  }
+
+  async function stopOperation(jobId: number) {
+    setJobSnapshot((current) =>
+      current?.id === jobId && (current.status === "Queued" || current.status === "Running")
+        ? { ...current, status: "Cancelling" }
+        : current,
+    );
+    try {
+      const snapshot = await cancelJob(jobId);
+      setJobSnapshot((current) => mergeJobSnapshot(current, snapshot));
+    } catch (error) {
+      setRuntimeError(describeAppError(error));
+    }
+  }
 
   async function runSilenceAnalysis(): Promise<SilenceAnalysis | null> {
     if (!analysisMedia || !selection) {
@@ -195,6 +358,12 @@ export function EditorWorkspace() {
           <h1>Mini Video Tool</h1>
         </div>
         <div className="header-actions">
+          <button type="button" className="ghost-button" onClick={() => void openProjectFile()}>
+            فتح مشروع
+          </button>
+          <button type="button" className="ghost-button" onClick={() => void saveProjectFile()}>
+            حفظ المشروع
+          </button>
           <button
             type="button"
             className="ghost-button"
@@ -214,6 +383,16 @@ export function EditorWorkspace() {
           <span className="local-badge">محلي</span>
         </div>
       </header>
+
+      <div className="runtime-stack">
+        {runtimeError ? (
+          <ErrorNotice
+            message={runtimeError.message}
+            technicalDetails={runtimeError.technicalDetails}
+          />
+        ) : null}
+        <OperationCockpit job={jobSnapshot} onCancel={stopOperation} />
+      </div>
 
       <Stepper
         activeStep={state.activeStep}
@@ -603,4 +782,11 @@ function useLocalFilmstrip(
   }, [localDuration, localPath, sourceOffset]);
 
   return frames;
+}
+
+function projectYouTubeDownloadIdentity(project: EditorState["project"]): string {
+  if (project.source.kind !== "youtube" || !project.selection) {
+    return "youtube-download-unavailable";
+  }
+  return `${project.source.url}|${project.selection.start}|${project.selection.end}|${project.source.downloadQuality}`;
 }

@@ -74,6 +74,7 @@ export type EditorAction =
   | { type: "source/localLoaded"; path: string; metadata: SourceMetadata }
   | { type: "source/youtubeLoaded"; url: string; metadata: YouTubeMetadata }
   | { type: "source/setStatus"; status: SourceStatus }
+  | { type: "project/load"; project: EditorProject; sourceStatus?: SourceStatus }
   | { type: "project/setSelection"; selection: TimeRange }
   | { type: "project/setQuality"; quality: DownloadQuality }
   | { type: "silence/setAnalysis"; detectedRegions: TimeRange[] }
@@ -226,6 +227,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
     case "source/setStatus":
       return { ...state, sourceStatus: action.status };
+    case "project/load":
+      return {
+        ...state,
+        project: action.project,
+        playheadUs: action.project.selection?.start ?? 0,
+        sourceStatus: action.sourceStatus ?? { kind: "ready", message: "تم تحميل المشروع" },
+        history: [],
+        future: [],
+      };
     case "project/setSelection":
       return withProject(state, { ...state.project, selection: action.selection });
     case "project/setQuality":

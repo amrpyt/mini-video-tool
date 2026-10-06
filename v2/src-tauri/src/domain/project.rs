@@ -22,7 +22,28 @@ pub enum DownloadQuality {
 pub struct SourceState {
     pub path: Option<PathBuf>,
     pub metadata: Option<SourceMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub youtube_metadata: Option<YouTubeProjectMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_offset: Option<MediaTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_metadata: Option<SourceMetadata>,
     pub download_quality: DownloadQuality,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YouTubeProjectMetadata {
+    pub video_id: String,
+    pub title: String,
+    pub duration: MediaTime,
+    pub thumbnail_url: Option<String>,
+    #[serde(default)]
+    pub qualities: Vec<DownloadQuality>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
