@@ -45,6 +45,7 @@ export function Timeline({
   acceptedRegions = [],
 }: TimelineProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const scrubPointerRef = useRef<number | null>(null);
   const [viewport, setViewport] = useState<TimelineViewport>(() => fitViewport(durationUs, 1000));
 
   useEffect(() => {
@@ -96,6 +97,23 @@ export function Timeline({
 
   function scrub(clientX: number) {
     onPlayheadChange(clampScrubTime(surfaceX(clientX), viewport, duration));
+  }
+
+  function startScrub(event: ReactPointerEvent<HTMLDivElement>) {
+    scrubPointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    scrub(event.clientX);
+  }
+
+  function moveScrub(event: ReactPointerEvent<HTMLDivElement>) {
+    if (scrubPointerRef.current !== event.pointerId) return;
+    scrub(event.clientX);
+  }
+
+  function stopScrub(event: ReactPointerEvent<HTMLDivElement>) {
+    if (scrubPointerRef.current !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    scrubPointerRef.current = null;
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>, handle: "start" | "end") {
@@ -182,7 +200,10 @@ export function Timeline({
         ref={surfaceRef}
         className="timeline-surface"
         data-testid="timeline-surface"
-        onPointerDown={(event) => scrub(event.clientX)}
+        onPointerDown={startScrub}
+        onPointerMove={moveScrub}
+        onPointerUp={stopScrub}
+        onPointerCancel={stopScrub}
         onWheel={onWheel}
       >
         <div className="timeline-window" style={{ width: viewport.widthPx }}>

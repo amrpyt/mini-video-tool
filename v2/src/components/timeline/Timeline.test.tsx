@@ -75,9 +75,17 @@ describe("Timeline", () => {
     Object.defineProperty(surface, "getBoundingClientRect", {
       value: () => ({ left: 0, top: 0, right: 1000, bottom: 240, width: 1000, height: 240, x: 0, y: 0, toJSON: () => ({}) }),
     });
+    Object.defineProperty(surface, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(surface, "releasePointerCapture", { value: vi.fn() });
 
     fireEvent.pointerDown(surface, { pointerId: 1, clientX: 500 });
     expect(onPlayheadChange).toHaveBeenCalledWith(50_000_000);
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 600 });
+    expect(onPlayheadChange).toHaveBeenLastCalledWith(60_000_000);
+    const callsAfterDrag = onPlayheadChange.mock.calls.length;
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 600 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 800 });
+    expect(onPlayheadChange).toHaveBeenCalledTimes(callsAfterDrag);
 
     const startHandle = screen.getByTestId("timeline-handle-start");
     Object.defineProperty(startHandle, "setPointerCapture", { value: vi.fn() });
